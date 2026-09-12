@@ -725,18 +725,27 @@ def surface_rows(entries, forms_by_lemma):
     return sorted(rows)
 
 
+CONTENT_POS = ("n", "v", "adj", "adv")
+
+
 def confusable_pairs(entries, limit_per_entry=4):
     """Words that are one slip apart: concede/precede, adapt/adopt, principal/principle.
 
-    Built from deletion neighbourhoods, so two words sharing a key differ by at
-    most one edit each. Only pairs of similar length and shared prefix or suffix
-    survive, which is what makes a pair genuinely confusable rather than merely
-    close.
+    Spelling distance alone is not enough. `there` and `three` are one edit
+    apart and nobody mixes them up, because one is a function word you have met
+    ten thousand times. A pair is only worth warning about when both halves are
+    content words at a level where you are still learning them, and they are
+    close enough to misread under time pressure.
     """
     by_key = collections.defaultdict(list)
     for e in entries:
         lemma = e["lemma"]
         if e["kind"] != "word" or len(lemma) < 5 or " " in lemma:
+            continue
+        if e["pos"] not in CONTENT_POS:
+            continue
+        # Below B1 a word is met so often that its shape is secure.
+        if CEFR_ORDER.get(e["cefr"], 0) < CEFR_ORDER["B1"]:
             continue
         for i in range(len(lemma)):
             by_key[lemma[:i] + lemma[i + 1:]].append(e)
@@ -753,6 +762,10 @@ def confusable_pairs(entries, limit_per_entry=4):
                     continue
                 if a["lemma"][:2] != b["lemma"][:2] and a["lemma"][-2:] != b["lemma"][-2:]:
                     continue
+                # One of the two words containing the other whole is a suffix
+                # pair (`depend`/`depends`), not a confusion.
+                if a["lemma"] in b["lemma"] or b["lemma"] in a["lemma"]:
+                    continue
                 found[a["id"]].add(b["id"])
                 found[b["id"]].add(a["id"])
 
@@ -766,29 +779,81 @@ def confusable_pairs(entries, limit_per_entry=4):
     return rows
 
 
-def root_relations(entries):
-    """Word families built from a shared Latin or Greek root."""
-    by_root = collections.defaultdict(list)
-    roots = {}
-    for e in entries:
-        etym = e["etym"]
-        if not etym or not etym.get("form"):
-            continue
-        key = (etym["lang"], etym["form"])
-        by_root[key].append(e["id"])
-        roots.setdefault(key, etym.get("gloss", ""))
+def root_families(entries, min_members=4):
+    """Families of words that visibly share a stem.
 
-    rows, root_rows = [], []
-    for rid, (key, members) in enumerate(sorted(by_root.items()), 1):
-        if not (2 <= len(members) <= 24):
+    Wiktionary's `root` template groups by Proto-Indo-European root, which is the
+    only key that puts `perspective` and `conspicuous` together — they share no
+    Latin word. But a root like *per- also drags in `fear` and `parent`, and
+    being told those are related is trivia, not something you can use.
+
+    So the root does the grouping and the *spelling* does the filtering: for each
+    root we find the letter pattern most of its members actually show (duc, spec,
+    cept), and keep only the members that contain it. What is left is a family a
+    learner can recognise on sight, which is the whole point of teaching roots.
+    """
+    by_root = collections.defaultdict(list)
+    for e in entries:
+        etym = e["etym"] or {}
+        if etym.get("root"):
+            by_root[etym["root"]].append(e)
+
+    rows, assignments = [], {}
+    for root, members in sorted(by_root.items()):
+        lemmas = {e["lemma"] for e in members if " " not in e["lemma"]}
+        if len(lemmas) < min_members:
             continue
-        lang, form = key
-        root_rows.append((rid, form, lang, roots[key]))
-        for i, a in enumerate(members):
-            for b in members[i + 1:]:
-                rows.append((a, b, "root"))
-    print(f"  roots: {len(root_rows):,} shared by {len(rows):,} pairs")
-    return root_rows, rows
+        pattern = shared_pattern(lemmas)
+        if not pattern:
+            continue
+        kept = [e for e in members if pattern in e["lemma"]]
+        if len({e["lemma"] for e in kept}) < min_members:
+            continue
+        # The label a learner can read: the Latin or Greek word the family's
+        # members actually descend from, with its gloss.
+        sources = collections.Counter(
+            (e["etym"]["lang"], e["etym"]["form"], e["etym"]["gloss"])
+            for e in kept
+            if e["etym"].get("form") and e["etym"].get("gloss")
+        )
+        lang, form, gloss = sources.most_common(1)[0][0] if sources else ("", "", "")
+        rid = len(rows) + 1
+        rows.append((rid, pattern, root, lang, form, gloss[:80]))
+        for e in kept:
+            assignments[e["id"]] = rid
+
+    print(f"  root families: {len(rows):,} covering {len(assignments):,} entries")
+    return rows, assignments
+
+
+# Prefixes carry direction, not meaning: every member of the *per- group starts
+# with `pro`, and "these 37 words share pro-" teaches nothing. Roots that happen
+# to sit word-initially (liber-, econo-) are not on this list and survive.
+AFFIXES = frozenset("""
+pro pre per con com col cor sub sup super inter intra trans ante anti circum
+contra extra infra post retro ultra over under out non semi multi mono poly
+auto tele micro macro hyper hypo meta para peri epi endo exo proto pseudo neo
+fore counter cross omni pan uni bi tri quad
+tion sion ment ness able ible ical ally ance ence ent ant ive ous ize ise
+""".split())
+
+
+def shared_pattern(lemmas, min_share=0.35):
+    """The longest run of letters that most of these words have in common."""
+    counts = collections.Counter()
+    for lemma in lemmas:
+        seen = set()
+        for size in range(3, 6):
+            for i in range(len(lemma) - size + 1):
+                seen.add(lemma[i:i + size])
+        counts.update(seen)
+    threshold = max(3, int(len(lemmas) * min_share))
+    best = []
+    for pattern, n in counts.items():
+        if n < threshold or pattern in AFFIXES:
+            continue
+        best.append((len(pattern), n, pattern))
+    return max(best)[2] if best else ""
 
 
 def lexical_relations(entries):
@@ -829,8 +894,10 @@ CREATE TABLE entry (
   root TEXT NOT NULL,
   root_lang TEXT NOT NULL,
   root_gloss TEXT NOT NULL,
+  root_id INTEGER NOT NULL,
   ja TEXT NOT NULL
 );
+CREATE INDEX entry_root ON entry(root_id, rank);
 CREATE INDEX entry_lemma ON entry(lemma);
 CREATE INDEX entry_rank ON entry(rank);
 CREATE INDEX entry_kind ON entry(kind, rank);
@@ -894,8 +961,10 @@ CREATE INDEX relation_b ON relation(b);
 
 CREATE TABLE root (
   id INTEGER PRIMARY KEY,
-  form TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  pie TEXT NOT NULL,
   lang TEXT NOT NULL,
+  form TEXT NOT NULL,
   gloss TEXT NOT NULL
 );
 
@@ -914,8 +983,8 @@ def join(items):
     return "|".join(str(i).replace("|", "/") for i in items)
 
 
-def write_db(path, entries, sentences, links, colls, relations, roots, surfaces,
-             common=()):
+def write_db(path, entries, sentences, links, colls, relations, roots, root_ids,
+             surfaces, common=()):
     if os.path.exists(path):
         os.remove(path)
     db = sqlite3.connect(path)
@@ -938,7 +1007,7 @@ def write_db(path, entries, sentences, links, colls, relations, roots, surfaces,
             e["rank"], e["freq"], join(e["lists"]), e["ipa"],
             join(f"{label}:{form}" for label, form in e["forms"]),
             etym.get("form", ""), etym.get("lang", ""), etym.get("gloss", ""),
-            join(headline[:3]),
+            root_ids.get(e["id"], 0), join(headline[:3]),
         ))
         for s in e["senses"]:
             sense_id += 1
@@ -951,7 +1020,7 @@ def write_db(path, entries, sentences, links, colls, relations, roots, surfaces,
             for en, ja in s["ex"]:
                 example_rows.append((sense_id, en, ja))
 
-    db.executemany("INSERT INTO entry VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", entry_rows)
+    db.executemany("INSERT INTO entry VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", entry_rows)
     db.executemany("INSERT INTO sense VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", sense_rows)
     db.executemany("INSERT INTO sense_example VALUES (?,?,?)", example_rows)
     db.executemany("INSERT INTO sentence VALUES (?,?,?)",
@@ -960,7 +1029,7 @@ def write_db(path, entries, sentences, links, colls, relations, roots, surfaces,
     db.executemany("INSERT INTO collocation (entry_id,pattern,head,collocate,phrase,"
                    "count,score,example) VALUES (?,?,?,?,?,?,?,?)", colls)
     db.executemany("INSERT INTO relation VALUES (?,?,?)", relations)
-    db.executemany("INSERT INTO root VALUES (?,?,?,?)", roots)
+    db.executemany("INSERT INTO root VALUES (?,?,?,?,?,?)", roots)
     db.executemany("INSERT INTO surface VALUES (?,?,?)", surfaces)
     db.executemany("INSERT INTO meta VALUES (?,?)", [
         ("entries", str(len(entry_rows))),
@@ -968,6 +1037,7 @@ def write_db(path, entries, sentences, links, colls, relations, roots, surfaces,
         ("sentences", str(len(sentences))),
         ("collocations", str(len(colls))),
         ("surfaces", str(len(surfaces))),
+        ("roots", str(len(roots))),
         ("schema", "1"),
     ])
     db.commit()
@@ -1010,14 +1080,14 @@ def main():
     print("counting collocations")
     colls = collocations(entries, forms)
     print("building relations")
-    root_rows, root_rel = root_relations(entries)
-    relations = root_rel + confusable_pairs(entries) + lexical_relations(entries)
+    root_rows, root_ids = root_families(entries)
+    relations = confusable_pairs(entries) + lexical_relations(entries)
 
     os.makedirs(ASSETS, exist_ok=True)
     tmp = os.path.join(CACHE, "content.db")
     surfaces = surface_rows(entries, forms_of_lemma(wikt))
     n_entry, n_sense, n_ex = write_db(tmp, entries, sentences, links, colls,
-                                      relations, root_rows, surfaces, common)
+                                      relations, root_rows, root_ids, surfaces, common)
     # Not `.gz`: the Android asset merger expands assets with that extension.
     out = os.path.join(ASSETS, "content.dbz")
     with open(tmp, "rb") as src, gzip.open(out, "wb", compresslevel=9) as dst:

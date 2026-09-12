@@ -20,6 +20,7 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     val senseCount: Int by lazy { meta("senses")?.toIntOrNull() ?: 0 }
     val sentenceCount: Int by lazy { meta("sentences")?.toIntOrNull() ?: 0 }
     val surfaceCount: Int by lazy { meta("surfaces")?.toIntOrNull() ?: 0 }
+    val rootCount: Int by lazy { meta("roots")?.toIntOrNull() ?: 0 }
 
     fun meta(key: String): String? =
         db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use {
@@ -46,12 +47,13 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
         root = c.getString(11),
         rootLang = c.getString(12),
         rootGloss = c.getString(13),
-        ja = c.getString(14).splitField(),
+        rootId = c.getLong(14),
+        ja = c.getString(15).splitField(),
     )
 
     private val entryColumns =
         "id, lemma, pos, kind, cefr, cefr_est, rank, freq, lists, ipa, forms, " +
-            "root, root_lang, root_gloss, ja"
+            "root, root_lang, root_gloss, root_id, ja"
 
     fun entry(id: Long): Entry? =
         db.rawQuery("SELECT $entryColumns FROM entry WHERE id = ?", arrayOf(id.toString()))
@@ -306,6 +308,52 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
             }
         }
         return best.mapValues { it.value.first }
+    }
+
+    // ---- word families ------------------------------------------------------
+
+    private fun readFamily(c: Cursor) = RootFamily(
+        c.getLong(0), c.getString(1), c.getString(2), c.getString(3),
+        c.getString(4), c.getString(5),
+    )
+
+    fun family(id: Long): RootFamily? =
+        db.rawQuery(
+            "SELECT id, pattern, pie, lang, form, gloss FROM root WHERE id = ?",
+            arrayOf(id.toString()),
+        ).use { if (it.moveToFirst()) readFamily(it) else null }
+
+    /** Every family, largest first: the app's etymology index. */
+    fun families(): List<Pair<RootFamily, Int>> {
+        val out = ArrayList<Pair<RootFamily, Int>>()
+        db.rawQuery(
+            "SELECT r.id, r.pattern, r.pie, r.lang, r.form, r.gloss, " +
+                "COUNT(DISTINCT e.lemma) FROM root r JOIN entry e ON e.root_id = r.id " +
+                "GROUP BY r.id ORDER BY COUNT(DISTINCT e.lemma) DESC",
+            null,
+        ).use { c -> while (c.moveToNext()) out.add(readFamily(c) to c.getInt(6)) }
+        return out
+    }
+
+    /**
+     * The words of a family, one per spelling.
+     *
+     * Entries are per part of speech, so `reject` the noun and the verb are two
+     * rows; a family list wants the word once.
+     */
+    fun familyMembers(rootId: Long, limit: Int = 40): List<Entry> {
+        val out = ArrayList<Entry>()
+        val seen = HashSet<String>()
+        db.rawQuery(
+            "SELECT $entryColumns FROM entry WHERE root_id = ? ORDER BY rank LIMIT ?",
+            arrayOf(rootId.toString(), (limit * 3).toString()),
+        ).use { c ->
+            while (c.moveToNext() && out.size < limit) {
+                val e = readEntry(c)
+                if (seen.add(e.lemma)) out.add(e)
+            }
+        }
+        return out
     }
 
     /** Words this one is easy to mix up with: adapt / adopt / adept. */

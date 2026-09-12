@@ -189,6 +189,57 @@ class ContentDbTest {
         assertTrue(built > 20)
     }
 
+    /**
+     * The word families are the part of the database a stranger sees first, so
+     * they have to be right: a family whose shared letters are a prefix teaches
+     * nothing, and one whose members do not show the pattern is not a family.
+     */
+    @Test
+    fun `every word family shares a visible stem`() {
+        val families = db.families()
+        assertTrue("only ${families.size} families", families.size >= 50)
+        val prefixes = setOf("pro", "pre", "con", "com", "inter", "trans", "sub", "anti")
+        families.forEach { (family, size) ->
+            assertTrue("${family.pattern} is an affix", family.pattern !in prefixes)
+            assertTrue("${family.pattern} is too short", family.pattern.length >= 3)
+            assertTrue("${family.pattern} has $size members", size >= 4)
+            val members = db.familyMembers(family.id)
+            members.forEach {
+                assertTrue(
+                    "${it.lemma} does not contain ${family.pattern}",
+                    family.pattern in it.lemma,
+                )
+            }
+            // One row per spelling: `reject` the noun and the verb are one word.
+            assertEquals(members.size, members.map { it.lemma }.toSet().size)
+        }
+    }
+
+    @Test
+    fun `the classic stems are among the families`() {
+        val patterns = db.families().map { it.first.pattern }.toSet()
+        val wanted = listOf("duc", "ject", "scrib", "port", "pend")
+        val missing = wanted.filter { it !in patterns }
+        assertTrue("missing families: $missing (have ${patterns.take(20)})", missing.size <= 1)
+    }
+
+    @Test
+    fun `sense shares are only claimed where the corpus counted them`() {
+        var withCounts = 0
+        for (deck in Deck.ALL.filter { !it.custom }) {
+            db.deckEntries(deck, emptySet(), 120).forEach { entry ->
+                val senses = db.senses(entry.id)
+                val counted = senses.filter { it.semcor > 0 }
+                if (counted.size >= 2) withCounts++
+                // A count belongs to a sense that can be shown in Japanese.
+                counted.forEach {
+                    assertTrue("${entry.lemma}: counted sense has no Japanese", it.ja.isNotEmpty())
+                }
+            }
+        }
+        assertTrue("no word had a usable sense split", withCounts > 40)
+    }
+
     private fun fakeDue(spec: com.eitangoze.data.CardSpec) = com.eitangoze.data.UserDb.DueCard(
         key = spec.key,
         kind = spec.kind,

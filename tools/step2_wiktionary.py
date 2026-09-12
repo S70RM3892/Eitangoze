@@ -117,24 +117,47 @@ def pick_forms(entry):
     return uniq[:8]
 
 
-ROOT_TEMPLATES = {"root", "inh", "der", "bor", "lbor", "learned borrowing"}
-ROOT_LANGS = {
-    "la": "ラテン語", "grc": "ギリシャ語", "ine-pro": "印欧祖語",
-    "fr": "フランス語", "LL.": "後期ラテン語", "ML.": "中世ラテン語",
-}
+SOURCE_TEMPLATES = {"inh", "der", "bor", "lbor", "af"}
+SOURCE_LANGS = {"la": "ラテン語", "grc": "ギリシャ語"}
 
 
 def pick_etymology(entry):
-    """The Latin/Greek root, which is what makes families of words learnable."""
+    """What unites a family of English words, and what each member came from.
+
+    Two different things are wanted here and they come from two places.
+
+    The *grouping* key is Wiktionary's `root` template, which names the
+    Proto-Indo-European root: `perspective` and `conspicuous` share `*speḱ-`
+    while sharing no Latin word, and grouping on the Latin form would separate
+    them. Earlier versions of this took the first Latin argument it found, which
+    is usually a prefix, and produced "families" whose shared element was `dis-`.
+
+    The *label* is the Latin or Greek word this particular English word is
+    descended from, with its gloss, which is the part a learner can read.
+    """
+    root = None
+    source = None
     for t in entry.get("etymology_templates") or []:
-        if t.get("name") not in ROOT_TEMPLATES:
-            continue
+        name = t.get("name")
         args = t.get("args") or {}
-        lang, form = args.get("2"), args.get("3")
-        if lang in ("la", "grc") and form:
-            gloss = args.get("4") or args.get("t") or ""
-            return {"lang": ROOT_LANGS[lang], "form": form, "gloss": gloss}
-    return None
+        if name == "root" and root is None:
+            form = args.get("3") or ""
+            if form:
+                root = form
+        elif name in SOURCE_TEMPLATES and source is None:
+            lang, form = args.get("2"), args.get("3")
+            if lang in SOURCE_LANGS and form and not form.startswith("-") \
+                    and not form.endswith("-") and len(form) >= 3:
+                source = {
+                    "lang": SOURCE_LANGS[lang],
+                    "form": form,
+                    "gloss": (args.get("5") or args.get("4") or args.get("t") or "").strip(),
+                }
+    if root is None and source is None:
+        return None
+    out = dict(source or {"lang": "", "form": "", "gloss": ""})
+    out["root"] = root or ""
+    return out
 
 
 def related_words(entry, key, limit=12):

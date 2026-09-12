@@ -66,6 +66,8 @@ data class Entry(
     val root: String,
     val rootLang: String,
     val rootGloss: String,
+    /** The word family this belongs to, or 0. See [RootFamily]. */
+    val rootId: Long,
     val ja: List<String>,
 ) {
     val isPhrase: Boolean get() = kind != EntryKind.WORD
@@ -101,6 +103,23 @@ data class Sense(
 }
 
 data class Example(val en: String, val ja: String)
+
+/**
+ * A family of words that visibly share a stem: `duc` in introduce, reduce,
+ * conduct, education. [pattern] is the letters they have in common, [form] and
+ * [gloss] the Latin or Greek word they descend from, [pie] the reconstructed
+ * root that groups them.
+ */
+data class RootFamily(
+    val id: Long,
+    val pattern: String,
+    val pie: String,
+    val lang: String,
+    val form: String,
+    val gloss: String,
+) {
+    val label: String get() = if (form.isBlank()) pattern else "$lang $form"
+}
 
 data class Collocation(
     val entryId: Long,

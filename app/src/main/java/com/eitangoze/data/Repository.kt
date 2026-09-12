@@ -256,6 +256,8 @@ class Repository(context: Context) {
         val relations: List<Relation>,
         val starred: Boolean,
         val cards: List<UserDb.DueCard>,
+        val family: RootFamily?,
+        val familyMembers: List<Entry>,
     )
 
     fun detail(entryId: Long): EntryDetail? {
@@ -270,6 +272,9 @@ class Repository(context: Context) {
             relations = content.relations(entryId),
             starred = entryId in user.starred(),
             cards = user.allCards(Deck.ALL.map { it.id }).filter { it.entryId == entryId },
+            family = entry.rootId.takeIf { it > 0 }?.let { content.family(it) },
+            familyMembers = if (entry.rootId > 0) content.familyMembers(entry.rootId)
+            else emptyList(),
         )
     }
 
