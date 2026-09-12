@@ -38,9 +38,9 @@ android {
     }
     buildFeatures { compose = true }
     androidResources {
-        // The bundled lexicon is already compressed; keep it byte-identical in the APK
-        // so it can be streamed from assets without an extra inflate pass.
-        noCompress += "gz"
+        // The bundled lexicon is gzipped already; deflating it again in the APK
+        // costs build time and saves nothing.
+        noCompress += "dbz"
     }
     testOptions {
         unitTests {

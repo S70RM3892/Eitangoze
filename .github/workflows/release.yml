@@ -1,0 +1,105 @@
+name: Release
+
+# Pushing a tag from a session that is scoped to one branch is rejected, so the
+# release is driven by .github/release.txt instead: write the version there, push,
+# and this workflow creates the tag, the release and the APK. The step is idempotent
+# — if the release already exists it stops without rebuilding.
+on:
+  push:
+    branches: ["**"]
+    paths: [".github/release.txt", ".github/release-notes/**"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, e.g. v1.4"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out which version to release
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="$(tr -d '[:space:]' < .github/release.txt)"
+          fi
+          if [ -z "$tag" ]; then
+            echo "no version to release"; exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "apk=Eitangoze-${tag#v}.apk" >> "$GITHUB_OUTPUT"
+
+      # An existing release is never rebuilt — the published APK must keep matching
+      # the commit it was built from — but its notes can still be corrected.
+      - name: Refresh the notes if this release already exists
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            notes=".github/release-notes/${TAG}.md"
+            if [ -f "$notes" ]; then
+              gh release edit "$TAG" --notes-file "$notes"
+              echo "::notice::$TAG already exists; refreshed its release notes."
+            else
+              echo "::notice::$TAG already exists and has no notes file; nothing to do."
+            fi
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up JDK 17
+        if: steps.existing.outputs.exists == 'false'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        if: steps.existing.outputs.exists == 'false'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        if: steps.existing.outputs.exists == 'false'
+        run: ./gradlew testDebugUnitTest
+
+      - name: Build release APK
+        if: steps.existing.outputs.exists == 'false'
+        run: |
+          ./gradlew assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "${{ steps.version.outputs.apk }}"
+
+      - name: Publish the release
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          APK: ${{ steps.version.outputs.apk }}
+        run: |
+          notes=".github/release-notes/${TAG}.md"
+          if [ -f "$notes" ]; then
+            gh release create "$TAG" --target "$GITHUB_SHA" \
+              --title "Eitangoze $TAG" --notes-file "$notes" "$APK"
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" \
+              --title "Eitangoze $TAG" --generate-notes "$APK"
+          fi
+
+      - name: Upload test report
+        if: always() && steps.existing.outputs.exists == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest

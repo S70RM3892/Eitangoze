@@ -16,7 +16,7 @@
 | 学術語 963 語（英語定義・日本語訳つき） | [New Academic Word List (NAWL)](https://www.newgeneralservicelist.com/new-academic-word-list) | CC BY-SA 4.0 |
 | TOEIC 頻出語 | [TOEIC Service List (TSL)](https://www.newgeneralservicelist.com/toeic-service-list) | CC BY-SA 4.0 |
 | B2 超の語の頻度順位 | [wikipedia-word-frequency](https://github.com/IlyaSemenov/wikipedia-word-frequency)（English Wikipedia 2023-04-13） | MIT |
-| 日本語語義の補助 | [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html)（電子辞書研究開発グループ） | CC BY-SA 4.0 |
+| 日本語訳の並び順（常用語を先頭に） | [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html)（電子辞書研究開発グループ）の優先度タグ | CC BY-SA 4.0 |
 
 ## 引用の表記
 
@@ -25,10 +25,16 @@
 - CEFR-J: 『CEFR-J Wordlist Version 1.6』東京外国語大学投野由紀夫研究室（<https://www.cefr-j.org/download.html> より 2026 年ダウンロード）
 - Tatoeba: 例文の一部は Tatoeba Project（<https://tatoeba.org>）に由来し、CC BY 2.0 FR で提供されています。
 - Wiktionary / 日本語 WordNet: 語義と日本語訳の一部はこれらに由来します。CC BY-SA の継承条件により、
-  生成された語彙データベース（`app/src/main/assets/content.db.gz`）も同条件で再配布できます。
+  生成された語彙データベース（`app/src/main/assets/content.dbz`）も同条件で再配布できます。
 
 ## 入っていないもの
 
 - **偏差値・入試の配点**: 予備校の私有データ、または大学ごとの募集要項にしかないため。
 - **市販単語帳の見出し語順・訳語**: 著作物であるため。自分の単語帳は TSV 取り込みで追加してください。
 - **音声**: Tatoeba の音声は話者ごとにライセンスが異なるため同梱せず、端末の TTS を使います。
+- **JMdict の逆引き（＝和英辞典を逆に引いて訳語を作ること）**: 訳語の質が落ちるため採用していません。実際に試すと
+  `adaptable`→「滑脱」、`addicted`→「どっぷり」、`agricultural`→「農用」のように、
+  日本語としては正しくても見出し語の訳としては使えないものが出ます。そのぶん
+  `bravely` `coastal` のような派生語が約 400 語落ちますが、訳がないよりも
+  **誤った訳が入るほうが害が大きい**と判断しました。
+  JMdict は「どの日本語が常用語か」の判定にだけ使っています（訳語の並べ替え）。

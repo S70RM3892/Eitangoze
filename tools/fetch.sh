@@ -43,7 +43,8 @@ get cefrj.zip                         https://www.cefr-j.org/data/CEFRJ_wordlist
 [ -s "CEFR-J Wordlist Ver1.6.xlsx" ] || unzip -o -q cefrj.zip
 get enwiki-word-frequency.txt https://raw.githubusercontent.com/IlyaSemenov/wikipedia-word-frequency/master/results/enwiki-2023-04-13.txt
 
-# --- JMdict (Japanese-English dictionary), used as a Japanese gloss fallback ---
+# --- JMdict: not used for translation, only to tell which Japanese words are
+#     everyday words, so glosses can be ordered sensibly ---
 get JMdict_e.gz http://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz
 
 echo "all sources present in $(pwd)"
