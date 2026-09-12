@@ -168,6 +168,9 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         val example = content.senseExamples(sense.id).firstOrNull { it.en.isNotBlank() }
             ?: return null
         val correct = sense.jaLine
+        // The wrong answers are the word's own other meanings and nothing else,
+        // so a two-sense word gives a two-way question. That is the real task —
+        // padding it out with another word's meaning would make it guessable.
         val others = senses.filter { it.id != sense.id }.map { it.jaLine }
             .filter { it != correct }.take(3)
         if (others.isEmpty()) return null

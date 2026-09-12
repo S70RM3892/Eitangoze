@@ -191,17 +191,23 @@ class Repository(context: Context) {
         return out
     }
 
+    /**
+     * Keep two questions about the same word apart.
+     *
+     * A word arrives with all of its question types at once, so without this the
+     * session opens with `abandon` asked five ways in a row — which tests short
+     * term memory rather than recall. Each step takes the earliest card whose
+     * word differs from the one just asked, so the original teaching order is
+     * disturbed as little as possible.
+     */
     private fun spaceOutSiblings(cards: List<StudyCard>): List<StudyCard> {
+        val remaining = cards.toMutableList()
         val out = ArrayList<StudyCard>(cards.size)
-        val held = ArrayDeque<StudyCard>()
-        for (card in cards) {
-            val clashes = out.takeLast(2).any { it.entry.id == card.entry.id }
-            if (clashes) held.addLast(card) else out.add(card)
-            while (held.isNotEmpty() && out.takeLast(2).none { it.entry.id == held.first().entry.id }) {
-                out.add(held.removeFirst())
-            }
+        while (remaining.isNotEmpty()) {
+            val previous = out.lastOrNull()?.entry?.id
+            val index = remaining.indexOfFirst { it.entry.id != previous }
+            out.add(remaining.removeAt(if (index >= 0) index else 0))
         }
-        out.addAll(held)
         return out
     }
 
