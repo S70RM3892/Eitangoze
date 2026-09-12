@@ -32,7 +32,14 @@ enum class EntryKind(val code: String, val ja: String) {
     WORD("word", "単語"),
     PHRASAL_VERB("phrasal_verb", "句動詞"),
     IDIOM("idiom", "熟語"),
-    PROVERB("proverb", "ことわざ");
+    PROVERB("proverb", "ことわざ"),
+
+    /**
+     * A grammar word (`the`, `is`, `of`). Present so that measuring a text does
+     * not report a seventh of ordinary English as unknown; never taught, because
+     * there is nothing to teach — a reader meets these before anything else.
+     */
+    FUNCTION("function", "機能語");
 
     companion object {
         private val byCode = entries.associateBy { it.code }
@@ -184,6 +191,8 @@ data class Deck(
     val cefr: String? = null,
     val kind: EntryKind? = null,
     val list: String? = null,
+    /** Filled by the learner (from a pasted text or word list), not by a query. */
+    val custom: Boolean = false,
 ) {
     companion object {
         val ALL: List<Deck> = listOf(
@@ -197,6 +206,8 @@ data class Deck(
             Deck("pv", "句動詞", "put off / look up to の類", kind = EntryKind.PHRASAL_VERB),
             Deck("idiom", "熟語・慣用句", "語をばらしても意味が出ない表現", kind = EntryKind.IDIOM),
             Deck("proverb", "ことわざ", "和文英訳に出る言い回し", kind = EntryKind.PROVERB),
+            Deck("mine", "自分の英文・単語帳から", "読みたい英文や手持ちのリストから取り込んだ語",
+                custom = true),
         )
 
         fun byId(id: String): Deck? = ALL.firstOrNull { it.id == id }

@@ -14,6 +14,7 @@ import com.eitangoze.data.Grade
 import com.eitangoze.data.GradeResult
 import com.eitangoze.data.Repository
 import com.eitangoze.data.StudyCard
+import com.eitangoze.data.TextReport
 import com.eitangoze.data.gradeEnglish
 import com.eitangoze.srs.Rating
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +60,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var searchResults by mutableStateOf<List<Entry>>(emptyList())
         private set
     var detail by mutableStateOf<Repository.EntryDetail?>(null)
+        private set
+
+    // ---- reading your own English -------------------------------------------
+
+    var readerText by mutableStateOf("")
+        private set
+    var report by mutableStateOf<TextReport?>(null)
+        private set
+    var analyzing by mutableStateOf(false)
+        private set
+    var selectedGaps by mutableStateOf<Set<Long>>(emptySet())
+        private set
+    var readerMessage by mutableStateOf<String?>(null)
+        private set
+    var importText by mutableStateOf("")
+        private set
+    var importResult by mutableStateOf<Repository.ImportResult?>(null)
         private set
 
     val repository: Repository? get() = repo
@@ -225,6 +243,88 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- reading -------------------------------------------------------------
+
+    fun updateReaderText(text: String) {
+        readerText = text
+    }
+
+    /** Analyse pasted or shared English; [andRun] is set when text arrived from
+     *  another app, where the learner has already asked for this. */
+    fun analyze(text: String? = null, andRun: Boolean = false) {
+        val repo = repo ?: return
+        text?.let { readerText = it }
+        if (readerText.isBlank()) return
+        if (!andRun && analyzing) return
+        analyzing = true
+        readerMessage = null
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { repo.analyze(readerText) }
+            report = result
+            // Everything that would take the reader to 98% starts ticked; the
+            // rest is there to add deliberately.
+            selectedGaps = result.gaps.take(result.gapsToThreshold)
+                .mapNotNull { it.entry?.id }.toSet()
+            analyzing = false
+        }
+    }
+
+    fun clearReport() {
+        report = null
+        selectedGaps = emptySet()
+        readerMessage = null
+    }
+
+    fun toggleGap(entryId: Long) {
+        selectedGaps = if (entryId in selectedGaps) selectedGaps - entryId
+        else selectedGaps + entryId
+    }
+
+    fun pickSelectedGaps() {
+        val repo = repo ?: return
+        val report = report ?: return
+        // Keep the "most blocking first" order the analysis worked out.
+        val ordered = report.gaps.mapNotNull { it.entry?.id }.filter { it in selectedGaps }
+        viewModelScope.launch {
+            val added = withContext(Dispatchers.IO) { repo.pick(ordered, source = "text") }
+            readerMessage = "$added 語を「自分の英文・単語帳から」に追加しました"
+            selectedGaps = emptySet()
+            refresh()
+        }
+    }
+
+    // ---- importing a word list ----------------------------------------------
+
+    fun updateImportText(text: String) {
+        importText = text
+    }
+
+    fun matchWordList() {
+        val repo = repo ?: return
+        viewModelScope.launch {
+            importResult = withContext(Dispatchers.IO) { repo.importWordList(importText) }
+            readerMessage = null
+        }
+    }
+
+    fun pickImported() {
+        val repo = repo ?: return
+        val matched = importResult?.matched ?: return
+        viewModelScope.launch {
+            val added = withContext(Dispatchers.IO) {
+                repo.pick(matched.map { it.id }, source = "list")
+            }
+            readerMessage = "$added 語を追加しました"
+            refresh()
+        }
+    }
+
+    fun clearImport() {
+        importText = ""
+        importResult = null
+        readerMessage = null
+    }
+
     // ---- settings -----------------------------------------------------------
 
     fun setDeckEnabled(deck: Deck, enabled: Boolean) {
@@ -260,6 +360,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setRetention(value: Double) {
         repo?.desiredRetention = value
+        refresh()
+    }
+
+    fun setBaselineLevel(level: String) {
+        repo?.baselineLevel = level
+        report = null
         refresh()
     }
 

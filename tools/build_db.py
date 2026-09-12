@@ -227,6 +227,20 @@ def inflection_map(wikt):
     return out
 
 
+def forms_of_lemma(wikt):
+    """lemma -> every inflected spelling, for expanding phrase surfaces."""
+    out = collections.defaultdict(set)
+    for entry in wikt:
+        lemma = entry["w"]
+        if " " in lemma:
+            continue
+        for _, form in entry["forms"]:
+            form = (form or "").lower()
+            if form and " " not in form:
+                out[lemma].add(form)
+    return out
+
+
 def count_phrases(phrases, forms):
     """How often each multi-word entry actually turns up in running English.
 
@@ -269,6 +283,26 @@ def count_phrases(phrases, forms):
     return counts
 
 
+# Closed-class words carry grammar, not meaning. Several have no translatable
+# gloss in any of our sources ("is", "an", "how"), so they would be dropped — and
+# then a page of ordinary English would come back one seventh "not in the
+# dictionary", which is both wrong and useless for measuring reading.
+FUNCTION_POS = {"prep", "conj", "pron", "det", "num", "intj", "prt"}
+FUNCTION_WORDS = set("""
+be am is are was were been being have has had having do does did doing
+will would shall should can could may might must ought need dare
+not no yes there here own very too also just only even still yet such
+""".split())
+
+
+def is_function_word(lemma, pos, info):
+    """A grammar word frequent enough that a reader is assumed to know it."""
+    if pos not in FUNCTION_POS and lemma not in FUNCTION_WORDS:
+        return False
+    rank = info.get("wiki_rank") or 10 ** 9
+    return rank <= 1000 or bool(set(info.get("lists") or ()) & {"cefrj", "ngsl"})
+
+
 def teachable(entry):
     """Is there a meaning here worth putting on a card?
 
@@ -278,6 +312,8 @@ def teachable(entry):
     glosses it 連なる. Extra WordNet senses still ride along underneath.
     """
     senses = entry["senses"]
+    if entry["kind"] == "function":
+        return True
     if not any(s["ja"] for s in senses):
         return False
     if entry["kind"] == "word":
@@ -339,13 +375,18 @@ def select_entries(lists, wikt, wn, phrase_counts):
                 continue
             graded = bool(set(info["lists"]) & {"cefrj", "ngsl", "nawl", "tsl"})
             rank = info["wiki_rank"] or 10 ** 9
+            if not has_ja and is_function_word(lemma, pos, info):
+                # Kept for the reading analysis only: no deck draws from
+                # `function`, so these never turn into cards.
+                kind = "function"
             # Ungraded words earn their place by being both frequent in
             # expository English and translatable; an entry with no Japanese
             # cannot be made into a card worth answering.
-            if not graded and not (rank <= 30000 and has_ja):
-                continue
-            if not has_ja and not graded:
-                continue
+            if kind != "function":
+                if not graded and not (rank <= 30000 and has_ja):
+                    continue
+                if not has_ja and not graded:
+                    continue
             cefr, est = estimate_cefr(info, has_ja)
             sort_key = (CEFR_ORDER[cefr], info["ngsl_rank"] or 10 ** 6, rank)
             freq = info["wiki_count"]
@@ -658,6 +699,32 @@ def collocations(entries, forms, min_count=4, per_entry=10):
 # relations
 
 
+def surface_rows(entries, forms_by_lemma):
+    """Every spelling that should count as "this entry" in a piece of English.
+
+    The reader screen has to decide, for each word of a pasted text, whether the
+    learner knows it. That means matching `abandoned`, `abandons` and
+    `abandoning` to `abandon`, and `looked up to` to `look up to`, which is what
+    this table is for.
+    """
+    rows = set()
+    for entry in entries:
+        lemma = entry["lemma"]
+        words = lemma.count(" ") + 1
+        rows.add((lemma, entry["id"], words))
+        if words == 1:
+            for _, form in entry["forms"]:
+                form = (form or "").lower()
+                if form and " " not in form:
+                    rows.add((form, entry["id"], 1))
+        else:
+            head, rest = lemma.split(" ", 1)
+            for form in {head} | forms_by_lemma.get(head, set()):
+                rows.add((f"{form} {rest}", entry["id"], words))
+    print(f"  surfaces: {len(rows):,}")
+    return sorted(rows)
+
+
 def confusable_pairs(entries, limit_per_entry=4):
     """Words that are one slip apart: concede/precede, adapt/adopt, principal/principle.
 
@@ -832,6 +899,13 @@ CREATE TABLE root (
   gloss TEXT NOT NULL
 );
 
+CREATE TABLE surface (
+  form TEXT NOT NULL,
+  entry_id INTEGER NOT NULL,
+  words INTEGER NOT NULL
+);
+CREATE INDEX surface_form ON surface(form);
+
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -840,7 +914,8 @@ def join(items):
     return "|".join(str(i).replace("|", "/") for i in items)
 
 
-def write_db(path, entries, sentences, links, colls, relations, roots, common=()):
+def write_db(path, entries, sentences, links, colls, relations, roots, surfaces,
+             common=()):
     if os.path.exists(path):
         os.remove(path)
     db = sqlite3.connect(path)
@@ -886,11 +961,13 @@ def write_db(path, entries, sentences, links, colls, relations, roots, common=()
                    "count,score,example) VALUES (?,?,?,?,?,?,?,?)", colls)
     db.executemany("INSERT INTO relation VALUES (?,?,?)", relations)
     db.executemany("INSERT INTO root VALUES (?,?,?,?)", roots)
+    db.executemany("INSERT INTO surface VALUES (?,?,?)", surfaces)
     db.executemany("INSERT INTO meta VALUES (?,?)", [
         ("entries", str(len(entry_rows))),
         ("senses", str(len(sense_rows))),
         ("sentences", str(len(sentences))),
         ("collocations", str(len(colls))),
+        ("surfaces", str(len(surfaces))),
         ("schema", "1"),
     ])
     db.commit()
@@ -938,8 +1015,9 @@ def main():
 
     os.makedirs(ASSETS, exist_ok=True)
     tmp = os.path.join(CACHE, "content.db")
+    surfaces = surface_rows(entries, forms_of_lemma(wikt))
     n_entry, n_sense, n_ex = write_db(tmp, entries, sentences, links, colls,
-                                      relations, root_rows, common)
+                                      relations, root_rows, surfaces, common)
     # Not `.gz`: the Android asset merger expands assets with that extension.
     out = os.path.join(ASSETS, "content.dbz")
     with open(tmp, "rb") as src, gzip.open(out, "wb", compresslevel=9) as dst:

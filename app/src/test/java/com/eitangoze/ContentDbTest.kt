@@ -51,7 +51,7 @@ class ContentDbTest {
     @Test
     fun `every deck has material and the levels are ordered`() {
         var previousFirstRank = 0
-        for (deck in Deck.ALL) {
+        for (deck in Deck.ALL.filter { !it.custom }) {
             val size = db.deckSize(deck)
             assertTrue("${deck.id} is empty", size > 30)
             val first = db.deckEntries(deck, emptySet(), 1).first()
@@ -71,7 +71,7 @@ class ContentDbTest {
     @Test
     fun `a headword appears once per part of speech`() {
         val seen = HashMap<String, Int>()
-        for (deck in Deck.ALL) {
+        for (deck in Deck.ALL.filter { !it.custom }) {
             db.deckEntries(deck, emptySet(), 400).forEach { entry ->
                 val key = "${entry.lemma}|${entry.pos.code}"
                 seen[key] = (seen[key] ?: 0) + 1
@@ -84,7 +84,7 @@ class ContentDbTest {
     @Test
     fun `every entry can be answered in Japanese`() {
         var checked = 0
-        for (deck in Deck.ALL) {
+        for (deck in Deck.ALL.filter { !it.custom }) {
             db.deckEntries(deck, emptySet(), 150).forEach { entry ->
                 val senses = db.senses(entry.id)
                 assertTrue("${entry.lemma} has no senses", senses.isNotEmpty())

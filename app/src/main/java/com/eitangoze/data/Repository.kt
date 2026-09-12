@@ -17,6 +17,7 @@ class Repository(context: Context) {
     val content: ContentDb = ContentDb.open(context)
     private val user = UserDb(context)
     private val factory = CardFactory(content)
+    private val analyzer = TextAnalyzer(content)
 
     // ---- settings -----------------------------------------------------------
 
@@ -40,6 +41,18 @@ class Repository(context: Context) {
     var enabledDecks: List<String>
         get() = user.setting(KEY_DECKS, "A1,A2,B1").split(",").filter { it.isNotBlank() }
         set(value) = user.putSetting(KEY_DECKS, value.joinToString(","))
+
+    /**
+     * The level the learner says they already have, or "" for none.
+     *
+     * Only the reading measurement uses it. Without it a first run reports that
+     * you cannot read `to` or `have`, which is true of the study database and
+     * false of the person — and a headline number that is obviously wrong is
+     * worse than no number.
+     */
+    var baselineLevel: String
+        get() = user.setting(KEY_BASELINE, "")
+        set(value) = user.putSetting(KEY_BASELINE, value)
 
     var enabledKinds: Set<CardKind>
         get() {
@@ -92,7 +105,7 @@ class Repository(context: Context) {
             val (_, learning, due) = counts[deck.id] ?: Triple(0, 0, 0)
             DeckStatus(
                 deck = deck,
-                total = content.deckSize(deck),
+                total = if (deck.custom) user.pickedCount() else content.deckSize(deck),
                 introduced = user.introducedEntries(CardKind.MEANING, deck.id).size,
                 newToday = user.introducedToday(deck.id, since),
                 learning = learning,
@@ -150,7 +163,13 @@ class Repository(context: Context) {
             if (left <= 0) continue
             val deck = Deck.byId(deckId) ?: continue
             val taken = user.introducedEntries(CardKind.MEANING, deckId)
-            val entries = content.deckEntries(deck, taken, limit = max(4, left / 2 + 2))
+            val entries = if (deck.custom) {
+                val ids = user.pickedEntries().filter { it !in taken }.take(max(4, left / 2 + 2))
+                val byId = content.entries(ids)
+                ids.mapNotNull { byId[it] }
+            } else {
+                content.deckEntries(deck, taken, limit = max(4, left / 2 + 2))
+            }
             for (entry in entries) {
                 if (left <= 0) break
                 val specs = factory.specs(entry, deckId, kinds)
@@ -258,6 +277,94 @@ class Repository(context: Context) {
 
     fun search(query: String) = content.search(query)
 
+    // ---- reading your own English -------------------------------------------
+
+    /**
+     * How much of a passage this learner can read, right now.
+     *
+     * A word counts as readable when a *recognition* card for it is predicted to
+     * be recallable: reading needs you to know the word when you see it, which
+     * is a weaker demand than producing it from Japanese, and grading reading by
+     * the production card would understate what you can actually read.
+     */
+    fun analyze(text: String, now: Long = System.currentTimeMillis()): TextReport =
+        analyzer.analyze(text) { entries ->
+            val cards = user.cardsOfEntries(entries.map { it.id })
+            entries.associate { entry ->
+                val own = cards[entry.id].orEmpty()
+                entry.id to when {
+                    // `the`, `is`, `of`: known before the app was installed.
+                    entry.kind == EntryKind.FUNCTION -> Knowledge.KNOWN
+                    // Declared as already known, and never contradicted by an
+                    // actual answer. Once a card exists, the card decides.
+                    own.isEmpty() && withinBaseline(entry) -> Knowledge.KNOWN
+                    else -> knowledge(own, now)
+                }
+            }
+        }
+
+    private fun withinBaseline(entry: Entry): Boolean {
+        val baseline = LEVELS.indexOf(baselineLevel)
+        if (baseline < 0) return false
+        val level = LEVELS.indexOf(entry.cefr)
+        return level in 0..baseline
+    }
+
+    private fun knowledge(cards: List<UserDb.DueCard>, now: Long): Knowledge {
+        if (cards.isEmpty()) return Knowledge.NEW
+        val recognition = cards.filter {
+            it.kind == CardKind.MEANING || it.kind == CardKind.CONTEXT ||
+                it.kind == CardKind.CLOZE
+        }.ifEmpty { cards }
+        // A card still in its learning steps has just been seen, so its predicted
+        // recall is near 1 whatever the learner actually did. Only a card that
+        // has graduated to review says anything about tomorrow's reading.
+        val settled = recognition.filter { it.phase == CardPhase.REVIEW }
+        if (settled.isEmpty()) return Knowledge.LEARNING
+        val recall = settled.maxOf { recallAt(it, now) }
+        return if (recall >= READABLE) Knowledge.KNOWN else Knowledge.LEARNING
+    }
+
+    /** Take words from your own material into the study list. */
+    fun pick(entryIds: List<Long>, source: String, now: Long = System.currentTimeMillis()): Int {
+        val added = user.pick(entryIds, source, now)
+        if (added > 0 && MINE !in enabledDecks) enabledDecks = enabledDecks + MINE
+        return added
+    }
+
+    data class ImportResult(val matched: List<Entry>, val missing: List<String>)
+
+    /**
+     * Read a word list — one word per line, or the first column of a TSV or CSV.
+     *
+     * The words are matched against the shipped dictionary rather than stored
+     * with whatever glosses came with them: a headword list is the learner's own
+     * study order, but the meanings, examples and grammar come from sources this
+     * app can stand behind.
+     */
+    fun importWordList(text: String): ImportResult {
+        val wanted = text.lineSequence()
+            .map { it.split('\t', ',', ';').first().trim().lowercase() }
+            .filter { it.isNotEmpty() && it.first().isLetter() }
+            .distinct()
+            .toList()
+        if (wanted.isEmpty()) return ImportResult(emptyList(), emptyList())
+        val found = content.surfaces(wanted)
+        val entries = content.entries(found.values.toSet())
+        val matched = ArrayList<Entry>()
+        val missing = ArrayList<String>()
+        val seen = HashSet<Long>()
+        for (word in wanted) {
+            val entry = found[word]?.let { entries[it] }
+            if (entry == null) {
+                missing.add(word)
+            } else if (seen.add(entry.id)) {
+                matched.add(entry)
+            }
+        }
+        return ImportResult(matched, missing)
+    }
+
     // ---- statistics ---------------------------------------------------------
 
     data class Stats(
@@ -352,8 +459,16 @@ class Repository(context: Context) {
         private const val KEY_REVIEW_LIMIT = "review_limit"
         private const val KEY_DECKS = "decks"
         private const val KEY_KINDS = "kinds"
+        private const val KEY_BASELINE = "baseline_level"
 
         const val DAY_MS = 86_400_000L
+
+        /** Predicted recall at which a word counts as readable on sight. */
+        const val READABLE = 0.8
+
+        const val MINE = "mine"
+
+        val LEVELS = listOf("A1", "A2", "B1", "B2", "C1", "C2")
 
         /** Days before the exam over which the retention target is tightened. */
         const val RAMP_DAYS = 60.0

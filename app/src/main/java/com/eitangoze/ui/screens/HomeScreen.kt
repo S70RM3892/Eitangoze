@@ -41,7 +41,9 @@ import kotlin.math.roundToInt
 fun HomeScreen(
     model: AppViewModel,
     onStudy: () -> Unit,
+    onReader: () -> Unit,
     onBrowse: () -> Unit,
+    onImport: () -> Unit,
     onStats: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -77,13 +79,19 @@ fun HomeScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Spacer(Modifier.height(14.dp))
+                ReaderInvite(onReader)
+
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onBrowse, modifier = Modifier.weight(1f)) {
                         Text("辞書")
                     }
+                    OutlinedButton(onClick = onImport, modifier = Modifier.weight(1f)) {
+                        Text("取り込み")
+                    }
                     OutlinedButton(onClick = onStats, modifier = Modifier.weight(1f)) {
-                        Text("学習状況")
+                        Text("状況")
                     }
                     OutlinedButton(onClick = onSettings, modifier = Modifier.weight(1f)) {
                         Text("設定")
@@ -121,6 +129,36 @@ fun HomeScreen(
                 )
             }
         }
+    }
+}
+
+/**
+ * The thing this app does that a word list cannot: measure a text against the
+ * learner. It sits on the home screen because it is also the best way to decide
+ * what to study next.
+ */
+@Composable
+private fun ReaderInvite(onReader: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .clickable(onClick = onReader)
+            .padding(14.dp),
+    ) {
+        Text(
+            "この英文、いま何％読める？",
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "過去問・論文・ニュースを貼ると、あなたの記憶に対する読解カバー率と、" +
+                "98% に届くために足りない単語だけが出ます",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
     }
 }
 

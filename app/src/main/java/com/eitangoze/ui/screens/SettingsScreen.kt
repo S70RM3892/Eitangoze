@@ -11,7 +11,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -30,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.eitangoze.data.CardKind
 import com.eitangoze.data.Deck
+import com.eitangoze.data.Repository
 import com.eitangoze.ui.AppViewModel
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -161,6 +165,9 @@ fun SettingsScreen(model: AppViewModel) {
         }
 
         Divider()
+        BaselineSetting(model)
+
+        Divider()
         ExamDateSetting(model)
 
         Divider()
@@ -194,6 +201,40 @@ fun SettingsScreen(model: AppViewModel) {
             }
         }
         Spacer(Modifier.height(40.dp))
+    }
+}
+
+/**
+ * "I already know everything up to here."
+ *
+ * Read by the coverage measurement only. It never marks anything as studied, so
+ * the moment a word is actually answered, the answer takes over from the claim.
+ */
+@Composable
+private fun BaselineSetting(model: AppViewModel) {
+    val repo = model.repository ?: return
+    val current = repo.baselineLevel
+    Section("すでに知っている層") {
+        Column {
+            Text(
+                "「英文を読めるか測る」で、この層までは読めるものとして数えます。" +
+                    "学習の出題には影響しません（実際に答えた語は、その結果が優先されます）。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                (listOf("" to "なし") + Repository.LEVELS.map { it to it }).forEach { (value, label) ->
+                    val selected = value == current
+                    OutlinedButton(
+                        onClick = { model.setBaselineLevel(value) },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        colors = if (selected) ButtonDefaults.buttonColors()
+                        else ButtonDefaults.outlinedButtonColors(),
+                    ) { Text(label, fontSize = 13.sp) }
+                }
+            }
+        }
     }
 }
 

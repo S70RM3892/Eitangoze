@@ -19,6 +19,7 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     val entryCount: Int by lazy { meta("entries")?.toIntOrNull() ?: 0 }
     val senseCount: Int by lazy { meta("senses")?.toIntOrNull() ?: 0 }
     val sentenceCount: Int by lazy { meta("sentences")?.toIntOrNull() ?: 0 }
+    val surfaceCount: Int by lazy { meta("surfaces")?.toIntOrNull() ?: 0 }
 
     fun meta(key: String): String? =
         db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use {
@@ -77,6 +78,7 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
      * database keeps the two files independent.
      */
     fun deckEntries(deck: Deck, exclude: Set<Long>, limit: Int): List<Entry> {
+        if (deck.custom) return emptyList()
         val where = StringBuilder("1 = 1")
         val args = mutableListOf<String>()
         deck.cefr?.let { where.append(" AND cefr = ?").also { _ -> args.add(it) } }
@@ -100,6 +102,7 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     }
 
     fun deckSize(deck: Deck): Int {
+        if (deck.custom) return 0
         val where = StringBuilder("1 = 1")
         val args = mutableListOf<String>()
         deck.cefr?.let { where.append(" AND cefr = ?").also { _ -> args.add(it) } }
@@ -275,6 +278,42 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
         }
         return out.toList()
     }
+
+    /**
+     * Match spellings from a text to entries.
+     *
+     * Returns the best entry per spelling: where a form belongs to several
+     * entries (`run` the noun and the verb), the one taught earliest wins, since
+     * that is the reading a learner meets first and the one their card records.
+     */
+    fun surfaces(forms: Collection<String>): Map<String, Long> {
+        if (forms.isEmpty()) return emptyMap()
+        val best = HashMap<String, Pair<Long, Int>>()
+        forms.chunked(300).forEach { chunk ->
+            val holes = chunk.joinToString(",") { "?" }
+            db.rawQuery(
+                "SELECT s.form, s.entry_id, e.rank FROM surface s " +
+                    "JOIN entry e ON e.id = s.entry_id WHERE s.form IN ($holes)",
+                chunk.toTypedArray(),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val form = c.getString(0)
+                    val id = c.getLong(1)
+                    val rank = c.getInt(2)
+                    val current = best[form]
+                    if (current == null || rank < current.second) best[form] = id to rank
+                }
+            }
+        }
+        return best.mapValues { it.value.first }
+    }
+
+    /** Words this one is easy to mix up with: adapt / adopt / adept. */
+    fun confusables(entryId: Long, limit: Int = 3): List<Entry> =
+        relations(entryId, limit = 12)
+            .filter { it.kind == RelationKind.CONFUSE && it.other.ja.isNotEmpty() }
+            .map { it.other }
+            .take(limit)
 
     fun relations(entryId: Long, limit: Int = 12): List<Relation> {
         val pairs = ArrayList<Pair<Long, RelationKind>>()

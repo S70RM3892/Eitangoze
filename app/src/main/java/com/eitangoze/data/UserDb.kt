@@ -60,6 +60,16 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION) 
         db.execSQL("CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         db.execSQL(
             """
+            CREATE TABLE picked (
+              entry_id INTEGER PRIMARY KEY,
+              ord INTEGER NOT NULL,
+              source TEXT NOT NULL,
+              added INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
             CREATE TABLE marker (
               entry_id INTEGER PRIMARY KEY,
               starred INTEGER NOT NULL DEFAULT 0,
@@ -245,6 +255,71 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION) 
                 "GROUP BY entry_id ORDER BY misses DESC LIMIT ?",
             arrayOf(limit.toString()),
         ).use { c -> while (c.moveToNext()) out.add(c.getLong(0) to c.getInt(1)) }
+        return out
+    }
+
+    // ---- the learner's own list ---------------------------------------------
+
+    /**
+     * Words the learner pulled in from their own material.
+     *
+     * Kept in the order they were added, which for a pasted text means "most
+     * blocking first" and for an imported word list means the order of the book
+     * it came from.
+     */
+    fun pick(entryIds: List<Long>, source: String, now: Long): Int {
+        val db = writableDatabase
+        var next = db.rawQuery("SELECT COALESCE(MAX(ord), 0) FROM picked", null)
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        var added = 0
+        db.beginTransaction()
+        try {
+            for (id in entryIds) {
+                next++
+                val before = db.rawQuery(
+                    "SELECT 1 FROM picked WHERE entry_id = ?", arrayOf(id.toString())
+                ).use { it.moveToFirst() }
+                if (before) continue
+                db.execSQL(
+                    "INSERT INTO picked(entry_id, ord, source, added) VALUES(?,?,?,?)",
+                    arrayOf(id, next, source, now),
+                )
+                added++
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return added
+    }
+
+    fun pickedEntries(): List<Long> {
+        val out = ArrayList<Long>()
+        readableDatabase.rawQuery("SELECT entry_id FROM picked ORDER BY ord", null)
+            .use { c -> while (c.moveToNext()) out.add(c.getLong(0)) }
+        return out
+    }
+
+    fun pickedCount(): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM picked", null)
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    /** Every card of the given entries, for judging what the learner can read. */
+    fun cardsOfEntries(ids: Collection<Long>): Map<Long, List<DueCard>> {
+        if (ids.isEmpty()) return emptyMap()
+        val out = HashMap<Long, MutableList<DueCard>>()
+        ids.chunked(400).forEach { chunk ->
+            val holes = chunk.joinToString(",") { "?" }
+            readableDatabase.rawQuery(
+                "SELECT $DUE_COLUMNS FROM card WHERE entry_id IN ($holes)",
+                chunk.map { it.toString() }.toTypedArray(),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val card = readDue(c)
+                    out.getOrPut(card.entryId) { ArrayList() }.add(card)
+                }
+            }
+        }
         return out
     }
 

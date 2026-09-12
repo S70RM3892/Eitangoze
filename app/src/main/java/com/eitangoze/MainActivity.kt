@@ -1,5 +1,6 @@
 package com.eitangoze
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,6 +20,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,6 +33,8 @@ import com.eitangoze.ui.AppViewModel
 import com.eitangoze.ui.screens.BrowseScreen
 import com.eitangoze.ui.screens.EntryScreen
 import com.eitangoze.ui.screens.HomeScreen
+import com.eitangoze.ui.screens.ImportScreen
+import com.eitangoze.ui.screens.ReaderScreen
 import com.eitangoze.ui.screens.SettingsScreen
 import com.eitangoze.ui.screens.StatsScreen
 import com.eitangoze.ui.screens.StudyScreen
@@ -40,18 +44,29 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val shared = sharedText(intent)
         setContent {
             EitangozeTheme {
-                App()
+                App(shared = shared, lookUp = intent?.action == Intent.ACTION_PROCESS_TEXT)
             }
         }
     }
+
+    /** Text handed to us by another app, via Share or the text-selection menu. */
+    private fun sharedText(intent: Intent?): String? = when (intent?.action) {
+        Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+        Intent.ACTION_PROCESS_TEXT ->
+            intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+        else -> null
+    }?.trim()?.takeIf { it.isNotEmpty() }
 }
 
 private enum class Screen(val title: String) {
     HOME("Eitangoze"),
     STUDY("学習"),
+    READER("読めるか測る"),
     BROWSE("辞書"),
+    IMPORT("単語帳の取り込み"),
     STATS("学習状況"),
     SETTINGS("設定"),
 }
@@ -63,9 +78,26 @@ private enum class Screen(val title: String) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun App(model: AppViewModel = viewModel()) {
+private fun App(
+    model: AppViewModel = viewModel(),
+    shared: String? = null,
+    lookUp: Boolean = false,
+) {
     var screen by remember { mutableStateOf(Screen.HOME) }
     val detail = model.detail
+
+    // Text arriving from another app: a short selection is a lookup, anything
+    // longer is a passage to measure.
+    LaunchedEffect(shared, model.loading) {
+        if (shared == null || model.loading) return@LaunchedEffect
+        if (lookUp || shared.split(Regex("\\s+")).size <= 3) {
+            model.search(shared)
+            screen = Screen.BROWSE
+        } else {
+            screen = Screen.READER
+            model.analyze(shared, andRun = true)
+        }
+    }
 
     if (model.loading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -116,7 +148,9 @@ private fun App(model: AppViewModel = viewModel()) {
                         model.startStudy()
                         screen = Screen.STUDY
                     },
+                    onReader = { screen = Screen.READER },
                     onBrowse = { screen = Screen.BROWSE },
+                    onImport = { screen = Screen.IMPORT },
                     onStats = { screen = Screen.STATS },
                     onSettings = { screen = Screen.SETTINGS },
                 )
@@ -128,7 +162,9 @@ private fun App(model: AppViewModel = viewModel()) {
                     },
                     onOpenEntry = model::openEntry,
                 )
+                Screen.READER -> ReaderScreen(model, onOpenEntry = model::openEntry)
                 Screen.BROWSE -> BrowseScreen(model, onOpenEntry = model::openEntry)
+                Screen.IMPORT -> ImportScreen(model)
                 Screen.STATS -> StatsScreen(model, onOpenEntry = model::openEntry)
                 Screen.SETTINGS -> SettingsScreen(model)
             }
