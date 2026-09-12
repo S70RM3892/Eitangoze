@@ -290,28 +290,25 @@ class Repository(context: Context) {
     fun analyze(text: String, now: Long = System.currentTimeMillis()): TextReport =
         analyzer.analyze(text) { entries ->
             val cards = user.cardsOfEntries(entries.map { it.id })
-            entries.associate { entry ->
-                val own = cards[entry.id].orEmpty()
-                entry.id to when {
-                    // `the`, `is`, `of`: known before the app was installed.
-                    entry.kind == EntryKind.FUNCTION -> Knowledge.KNOWN
-                    // Declared as already known, and never contradicted by an
-                    // actual answer. Once a card exists, the card decides.
-                    own.isEmpty() && withinBaseline(entry) -> Knowledge.KNOWN
-                    else -> knowledge(own, now)
-                }
-            }
+            entries.associate { entry -> entry.id to memoryOf(entry, cards[entry.id].orEmpty(), now) }
         }
 
-    private fun withinBaseline(entry: Entry): Boolean {
-        val baseline = LEVELS.indexOf(baselineLevel)
-        if (baseline < 0) return false
-        val level = LEVELS.indexOf(entry.cefr)
-        return level in 0..baseline
-    }
-
-    private fun knowledge(cards: List<UserDb.DueCard>, now: Long): Knowledge {
-        if (cards.isEmpty()) return Knowledge.NEW
+    /**
+     * What is known about one word, including the curve it will decay along.
+     *
+     * Grammar words and anything inside the declared baseline carry no curve:
+     * they were not learned here, so this app has no basis for predicting that
+     * they will be forgotten, and inventing one would be the wrong kind of
+     * drama. Everything the learner actually answered decays for real.
+     */
+    private fun memoryOf(entry: Entry, cards: List<UserDb.DueCard>, now: Long): WordMemory {
+        if (entry.kind == EntryKind.FUNCTION) {
+            return WordMemory(Knowledge.KNOWN, permanent = true)
+        }
+        if (cards.isEmpty()) {
+            return if (withinBaseline(entry)) WordMemory(Knowledge.KNOWN, permanent = true)
+            else WordMemory(Knowledge.NEW)
+        }
         val recognition = cards.filter {
             it.kind == CardKind.MEANING || it.kind == CardKind.CONTEXT ||
                 it.kind == CardKind.CLOZE
@@ -320,9 +317,21 @@ class Repository(context: Context) {
         // recall is near 1 whatever the learner actually did. Only a card that
         // has graduated to review says anything about tomorrow's reading.
         val settled = recognition.filter { it.phase == CardPhase.REVIEW }
-        if (settled.isEmpty()) return Knowledge.LEARNING
-        val recall = settled.maxOf { recallAt(it, now) }
-        return if (recall >= READABLE) Knowledge.KNOWN else Knowledge.LEARNING
+        val best = settled.maxByOrNull { recallAt(it, now) }
+            ?: return WordMemory(Knowledge.LEARNING)
+        val recall = recallAt(best, now)
+        return WordMemory(
+            knowledge = if (recall >= READABLE) Knowledge.KNOWN else Knowledge.LEARNING,
+            stability = best.stability,
+            lastReview = best.lastReview,
+        )
+    }
+
+    private fun withinBaseline(entry: Entry): Boolean {
+        val baseline = LEVELS.indexOf(baselineLevel)
+        if (baseline < 0) return false
+        val level = LEVELS.indexOf(entry.cefr)
+        return level in 0..baseline
     }
 
     /** Take words from your own material into the study list. */
@@ -464,7 +473,7 @@ class Repository(context: Context) {
         const val DAY_MS = 86_400_000L
 
         /** Predicted recall at which a word counts as readable on sight. */
-        const val READABLE = 0.8
+        const val READABLE = TextSpan.READABLE
 
         const val MINE = "mine"
 

@@ -79,6 +79,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var importResult by mutableStateOf<Repository.ImportResult?>(null)
         private set
 
+    /** Which point on the forgetting timeline the passage is drawn at. */
+    var horizon by mutableStateOf(0)
+        private set
+
     val repository: Repository? get() = repo
 
     init {
@@ -265,8 +269,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // rest is there to add deliberately.
             selectedGaps = result.gaps.take(result.gapsToThreshold)
                 .mapNotNull { it.entry?.id }.toSet()
+            horizon = 0
             analyzing = false
         }
+    }
+
+    fun moveHorizon(index: Int) {
+        horizon = index
     }
 
     fun clearReport() {

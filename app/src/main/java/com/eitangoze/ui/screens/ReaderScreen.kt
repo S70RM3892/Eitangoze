@@ -31,7 +31,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.remember
 import com.eitangoze.data.Knowledge
+import com.eitangoze.data.Repository
 import com.eitangoze.data.TextReport
 import com.eitangoze.ui.AppViewModel
 import com.eitangoze.ui.theme.Marks
@@ -58,12 +60,19 @@ fun ReaderScreen(model: AppViewModel, onOpenEntry: (Long) -> Unit) {
 @Composable
 private fun ReaderInput(model: AppViewModel) {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("英文を読めるか測る", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Text("この英文、試験日にはこう見える", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
         Text(
-            "過去問でも論文でもニュースでも、英文を貼ると「いまのあなたが何％読めるか」と、" +
-                "読み切るために足りない単語だけが出ます。他のアプリから共有しても開けます。",
+            "英文を貼ると、あなたの記憶の予測でその英文を描き直します。" +
+                "時間を進めると、何もしなかった場合に読めなくなる語から順に消えていきます。" +
+                "いま読めるかは読めば分かりますが、3か月後に読めるかは読んでも分かりません。",
             style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "他のアプリの共有メニューからも開けます。",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(12.dp))
@@ -84,7 +93,7 @@ private fun ReaderInput(model: AppViewModel) {
                 onClick = { model.analyze() },
                 enabled = model.readerText.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("読めるか測る") }
+            ) { Text("この英文で見る") }
         }
     }
 }
@@ -92,9 +101,38 @@ private fun ReaderInput(model: AppViewModel) {
 @Composable
 private fun ReaderResult(model: AppViewModel, report: TextReport, onOpenEntry: (Long) -> Unit) {
     val selected = model.selectedGaps
+    val now = remember(report) { System.currentTimeMillis() }
+    val horizonList = remember(report, model.repository?.examDate) {
+        horizons(model.repository?.examDate ?: 0L, now)
+    }
+    val index = model.horizon.coerceIn(0, horizonList.lastIndex)
+    val at = now + horizonList[index].days.toLong() * Repository.DAY_MS
+
     LazyColumn(Modifier.fillMaxSize()) {
         item {
             Column(Modifier.padding(16.dp)) {
+                // The passage itself, drawn at the chosen date. Everything else
+                // on this screen explains what is happening to it.
+                FadingPassage(report, at)
+                Spacer(Modifier.height(14.dp))
+                FadingLegend()
+                Spacer(Modifier.height(12.dp))
+                HorizonControl(report, horizonList, index, now) { model.moveHorizon(it) }
+                Spacer(Modifier.height(14.dp))
+                if (horizonList.last().days > 0) {
+                    Text(
+                        "何もしなかった場合の推移",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    DecayCurve(report, horizonList.last().days, now)
+                    Text(
+                        "破線が 98%（辞書なしで読める境界）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
                 CoverageHeadline(report, model.repository?.baselineLevel.orEmpty())
                 Spacer(Modifier.height(16.dp))
                 KnowledgeBars(report)
