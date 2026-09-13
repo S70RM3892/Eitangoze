@@ -29,6 +29,31 @@
 - Wiktionary / 日本語 WordNet: 語義と日本語訳の一部はこれらに由来します。CC BY-SA の継承条件により、
   生成された語彙データベース（`app/src/main/assets/content.dbz`）も同条件で再配布できます。
 
+## 読解用の英文（passages.dbz）
+
+アプリには英文が最初から入っています。貼らせた時点でほとんどの人は使わないからです。
+13ジャンルを3つの取得元でまかない、いずれも再配布が認められています。
+
+| ジャンル | 出典 | ライセンス |
+| --- | --- | --- |
+| 自然科学 / 技術 / 環境 / 経済 / 歴史 / 哲学 / 言語 / 芸術 / 社会 | English Wikipedia（カテゴリから、API の plaintext 抽出） | CC BY-SA 4.0 |
+| やさしい英語 | Simple English Wikipedia | CC BY-SA 4.0 |
+| 時事 | English Wikinews | CC BY 2.5 |
+| 物語・文学 / 随筆・演説 | Project Gutenberg（Gutendex 経由） | パブリックドメイン |
+| 医学・脳科学・心理 | PubMed Central のオープンアクセス集合 | 各論文の `<license>` が CC BY / CC0 のものだけ |
+
+構文解析は端末では行わず、`tools/step8_syntax.py` が spaCy で1度だけ行って木ごと同梱します。
+`en_core_web_trf` と `en_core_web_sm` はいずれも MIT です。
+
+### 取得元として採らなかったもの
+
+いずれもスクレイピングが必要で、出所を後から確かめられない英文を入れるくらいなら
+ジャンルを1つ落とすほうがよい、と判断しました。
+
+- **VOA Learning English**（パブリックドメイン）— RSS の入口が不透明な ID で、一覧の手段が公開されていない
+- **NASA / NOAA**（パブリックドメイン）— WordPress の REST 出力がサイトの付属物ばかりで、本文を掘り出す必要がある
+- **World Bank OKR**（CC BY）— 本体が PDF
+
 ## 書き下ろした唯一のもの: 接辞の日本語訳
 
 Wiktionary の接辞ページは翻訳表をほとんど持たず、機械的に取れた日本語は **23 件**でした。
