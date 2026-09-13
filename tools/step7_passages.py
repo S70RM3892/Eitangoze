@@ -36,6 +36,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -48,6 +49,9 @@ USER_AGENT = "Eitangoze/1.0 (open-data vocabulary app; +https://github.com/S70RM
 # anything shorter is not the exercise and anything much longer is two of them.
 MIN_WORDS = 420
 MAX_WORDS = 1100
+# Simple English articles are written short on purpose; holding them to the
+# length of an exam passage leaves one article in the whole encyclopaedia.
+PLAIN_MIN_WORDS = 220
 
 # Wikipedia is an encyclopaedia, so its articles arrive with apparatus that is
 # not prose and must not be counted as reading.
@@ -57,17 +61,40 @@ SECTION_STOP = {
 }
 
 
-def get(url, tries=3):
+# Everything goes through one throttle. These are public APIs run as a service
+# to everyone, and the first bulk run answered 429 to every Wikimedia request
+# for a while afterwards — which does not look like rate limiting in the logs,
+# it looks like the source being empty. One request at a time, paced.
+MIN_INTERVAL = 1.1
+_last_request = [0.0]
+
+
+def get(url, tries=4):
     for attempt in range(tries):
+        wait = MIN_INTERVAL - (time.monotonic() - _last_request[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_request[0] = time.monotonic()
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(request, timeout=60) as response:
                 return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code == 429 and attempt < tries - 1:
+                # The server said how long to wait; believe it.
+                retry_after = error.headers.get("Retry-After")
+                delay = int(retry_after) if (retry_after or "").isdigit() else 0
+                time.sleep(min(max(delay, 10 * (attempt + 1)), 120))
+                continue
+            if attempt == tries - 1:
+                print(f"    ! HTTP {error.code} {url[:86]}", file=sys.stderr)
+                return None
+            time.sleep(3 * (attempt + 1))
         except Exception as error:  # noqa: BLE001 - any network failure retries
             if attempt == tries - 1:
-                print(f"    ! {type(error).__name__} {url[:90]}", file=sys.stderr)
+                print(f"    ! {type(error).__name__} {url[:86]}", file=sys.stderr)
                 return None
-            time.sleep(2 ** attempt)
+            time.sleep(3 * (attempt + 1))
     return None
 
 
@@ -95,16 +122,57 @@ def wiki_api(site, **params):
     return get_json(f"https://{site}/w/api.php?" + urllib.parse.urlencode(params))
 
 
-def category_titles(site, category, limit=120):
-    """Article titles in a category, one level deep."""
+def category_members(site, category, namespace, limit, pages=4):
+    """Members of a category in one namespace, following continuations.
+
+    `cmlimit` caps how many members the server *scans*, not how many come back
+    after `cmnamespace` filters them. Asking for 30 subcategories of a category
+    whose first 30 members are all articles returns an empty list and a
+    continuation token — which reads exactly like "this category has no
+    subcategories" and quietly halves the library.
+    """
     out = []
-    data = wiki_api(
-        site, list="categorymembers", cmtitle=f"Category:{category}",
-        cmlimit=str(limit), cmnamespace="0",
+    params = dict(
+        list="categorymembers", cmtitle=f"Category:{category}",
+        cmlimit="500", cmnamespace=namespace,
     )
-    for member in ((data or {}).get("query", {}).get("categorymembers") or []):
-        out.append(member["title"])
-    return out
+    for _ in range(pages):
+        data = wiki_api(site, **params)
+        if not data:
+            break
+        out += [m["title"] for m in
+                (data.get("query", {}).get("categorymembers") or [])]
+        token = (data.get("continue") or {}).get("cmcontinue")
+        if not token or len(out) >= limit:
+            break
+        params["cmcontinue"] = token
+    return out[:limit]
+
+
+def category_titles(site, category, limit=400, depth=1):
+    """Article titles in a category and, one level down, in its subcategories.
+
+    A single category is nowhere near enough. `Atmospheric sciences` lists 39
+    articles directly, and most of those are stubs or list pages that the length
+    filter then throws out — the first full run came back with 41 science
+    passages against a budget of 214. Its ten subcategories are where the actual
+    articles are.
+    """
+    seen, out = set(), []
+    frontier = [(category, 0)]
+    while frontier and len(out) < limit:
+        name, level = frontier.pop(0)
+        if name in seen:
+            continue
+        seen.add(name)
+        for title in category_members(site, name, "0", 100):
+            if title not in seen:
+                seen.add(title)
+                out.append(title)
+        if level < depth:
+            for sub in category_members(site, name, "14", 30):
+                frontier.append((sub.split(":", 1)[-1], level + 1))
+    return out[:limit]
 
 
 def clean_wiki(text):
@@ -123,7 +191,7 @@ def clean_wiki(text):
     return "\n\n".join(kept)
 
 
-def wiki_passages(site, titles, genre, licence, batch=12):
+def wiki_passages(site, titles, genre, licence, batch=12, minimum=MIN_WORDS):
     out = []
     for start in range(0, len(titles), batch):
         chunk = titles[start:start + batch]
@@ -134,12 +202,12 @@ def wiki_passages(site, titles, genre, licence, batch=12):
         for page in ((data or {}).get("query", {}).get("pages") or {}).values():
             extract = page.get("extract") or ""
             text = clean_wiki(extract)
-            if not MIN_WORDS <= words(text) <= MAX_WORDS:
+            if not minimum <= words(text) <= MAX_WORDS:
                 # Long articles are still usable: take the opening, which is the
                 # part written as continuous prose rather than as a table.
                 if words(text) > MAX_WORDS:
                     text = trim_to(text, MAX_WORDS)
-                if not MIN_WORDS <= words(text) <= MAX_WORDS:
+                if not minimum <= words(text) <= MAX_WORDS:
                     continue
             out.append({
                 "title": page.get("title", ""),
@@ -150,7 +218,6 @@ def wiki_passages(site, titles, genre, licence, batch=12):
                     page.get("title", "").replace(" ", "_")),
                 "license": licence,
             })
-        time.sleep(0.3)
     return out
 
 
@@ -237,6 +304,29 @@ EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 # Only these two let the passage ship with the app. Every other CC variant in
 # the subset carries NC or ND, which redistribution inside an APK would break.
 PMC_OK_LICENCE = re.compile(r"creativecommons\.org/(licenses/by/|publicdomain/zero)")
+XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
+
+
+def licence_url(article):
+    """The licence an article states, wherever it happened to state it.
+
+    PMC writes this three ways. Most articles put the URL in the *text* of an
+    `<ali:license_ref>` element; some hang it on `xlink:href` of `<license>`;
+    some only have it on an `<ext-link>` inside the licence paragraph. Reading
+    only the second of those found a valid licence on nothing at all, which is
+    how a source that works ends up looking like a source that is empty.
+    """
+    licence = article.find(".//license")
+    if licence is None:
+        return ""
+    for node in licence.iter():
+        href = node.get(XLINK_HREF) or ""
+        if "creativecommons.org" in href:
+            return href
+        text = (node.text or "").strip()
+        if text.startswith("http") and "creativecommons.org" in text:
+            return text
+    return ""
 
 
 def pmc_ids(query, limit=60):
@@ -261,9 +351,7 @@ def pmc_passages(query, genre, limit=60):
         except ET.ParseError:
             continue
         for article in root.iter("article"):
-            licence = article.find(".//license")
-            href = (licence.get("{http://www.w3.org/1999/xlink}href")
-                    if licence is not None else None) or ""
+            href = licence_url(article)
             if not PMC_OK_LICENCE.search(href):
                 continue
             title_el = article.find(".//article-title")
@@ -278,12 +366,22 @@ def pmc_passages(query, genre, limit=60):
             # Paragraphs of the article's own prose. Figure captions, tables and
             # reference lists are different kinds of writing and are not read
             # end to end, so they are not part of a reading passage.
+            # Every paragraph of the body, minus the ones inside a figure or a
+            # table. Looking only under <sec> found nothing at all: plenty of
+            # articles put their prose straight in <body>, and nested sections
+            # would have been counted twice.
+            skip = set()
+            for wrapper in body.iter():
+                if wrapper.tag in ("fig", "table-wrap", "caption", "boxed-text"):
+                    for para in wrapper.iter("p"):
+                        skip.add(id(para))
             paragraphs = []
-            for parent in body.iter("sec"):
-                for para in parent.findall("p"):
-                    line = " ".join("".join(para.itertext()).split())
-                    if words(line) >= 25:
-                        paragraphs.append(line)
+            for para in body.iter("p"):
+                if id(para) in skip:
+                    continue
+                line = " ".join("".join(para.itertext()).split())
+                if words(line) >= 25:
+                    paragraphs.append(line)
             text = trim_to("\n\n".join(paragraphs), MAX_WORDS)
             if words(text) < MIN_WORDS:
                 continue
@@ -295,7 +393,6 @@ def pmc_passages(query, genre, limit=60):
                 "url": f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{pmcid}/",
                 "license": "CC BY 4.0" if "licenses/by/" in href else "CC0 1.0",
             })
-        time.sleep(0.4)
     return out
 
 
@@ -370,7 +467,7 @@ def collect(genre_id, label, kind, seeds, budget):
                                  genre_id, CC_BY_SA)[:want]
         elif kind == "simple":
             got += wiki_passages(SIMPLE, category_titles(SIMPLE, seed)[:want * 6],
-                                 genre_id, CC_BY_SA)[:want]
+                                 genre_id, CC_BY_SA, minimum=PLAIN_MIN_WORDS)[:want]
         elif kind == "wikinews":
             site = "en.wikinews.org"
             got += wiki_passages(site, category_titles(site, seed)[:want * 4],
