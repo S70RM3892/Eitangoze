@@ -15,6 +15,7 @@ import kotlin.random.Random
 class Repository(context: Context) {
 
     val content: ContentDb = ContentDb.open(context)
+    val passages: PassageDb = PassageDb.open(context)
     private val user = UserDb(context)
     private val factory = CardFactory(content)
     private val analyzer = TextAnalyzer(content)
@@ -336,6 +337,33 @@ class Repository(context: Context) {
     }
 
     fun affixes() = content.affixes()
+
+    // ---- reading a shipped passage -------------------------------------------
+
+    /**
+     * A passage with its sentences, ready to be read and folded.
+     *
+     * The trees came from the build, so nothing is computed here: this only
+     * puts the two halves together and says which sentences are allowed to
+     * offer folding at all.
+     */
+    data class Reading(
+        val passage: Passage,
+        val sentences: List<ParsedSentence>,
+    ) {
+        val foldable: Int get() = sentences.count { it.confirmed && it.folds.isNotEmpty() }
+    }
+
+    fun reading(passageId: Long): Reading? {
+        val passage = passages.passage(passageId) ?: return null
+        return Reading(passage, passages.sentences(passageId))
+    }
+
+    /** The shelf, for the escape hatch: every genre and what is on it. */
+    fun shelf() = passages.shelf()
+
+    fun passageList(genre: Genre? = null, cefr: String? = null, limit: Int = 40) =
+        passages.passages(genre, cefr, limit)
 
     fun setStarred(entryId: Long, value: Boolean) = user.setStarred(entryId, value)
 

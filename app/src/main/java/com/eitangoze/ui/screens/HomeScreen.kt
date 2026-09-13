@@ -42,6 +42,7 @@ fun HomeScreen(
     model: AppViewModel,
     onStudy: () -> Unit,
     onReader: () -> Unit,
+    onLibrary: () -> Unit,
     onBrowse: () -> Unit,
     onImport: () -> Unit,
     onStats: () -> Unit,
@@ -81,6 +82,11 @@ fun HomeScreen(
                 }
                 Spacer(Modifier.height(14.dp))
                 ReaderInvite(onReader)
+
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = onLibrary, modifier = Modifier.fillMaxWidth()) {
+                    Text("英文を読む（同梱の読解パッセージ）")
+                }
 
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

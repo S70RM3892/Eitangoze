@@ -10,6 +10,8 @@ import com.eitangoze.data.AnswerMode
 import com.eitangoze.data.CardKind
 import com.eitangoze.data.Deck
 import com.eitangoze.data.Entry
+import com.eitangoze.data.Fold
+import com.eitangoze.data.ParsedSentence
 import com.eitangoze.data.Grade
 import com.eitangoze.data.GradeResult
 import com.eitangoze.data.Repository
@@ -63,6 +65,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The morpheme grid, open over everything else when it is not null. */
     var grid by mutableStateOf<Repository.Grid?>(null)
+        private set
+
+    // ---- reading a shipped passage -------------------------------------------
+
+    var reading by mutableStateOf<Repository.Reading?>(null)
+        private set
+
+    /** Which sentence the fold view is working on, or -1. */
+    var studiedSentence by mutableStateOf(-1)
+        private set
+
+    /** The subtrees currently collapsed in [studiedSentence]. */
+    var collapsed by mutableStateOf<List<Fold>>(emptyList())
         private set
 
     // ---- reading your own English -------------------------------------------
@@ -266,6 +281,59 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun closeGrid() {
         grid = null
     }
+
+    fun openPassage(id: Long) {
+        val repo = repo ?: return
+        viewModelScope.launch {
+            reading = withContext(Dispatchers.IO) { repo.reading(id) }
+            studiedSentence = -1
+            collapsed = emptyList()
+        }
+    }
+
+    fun closeReading() {
+        reading = null
+        studiedSentence = -1
+        collapsed = emptyList()
+    }
+
+    fun studySentence(ord: Int) {
+        studiedSentence = ord
+        collapsed = emptyList()
+    }
+
+    fun closeSentence() {
+        studiedSentence = -1
+        collapsed = emptyList()
+    }
+
+    /**
+     * Collapse a subtree, or open it again.
+     *
+     * Folding something that contains already-folded pieces absorbs them: the
+     * bigger fold is the answer to the same question, and leaving the inner
+     * marks inside it would show a `⌄` that can no longer be opened.
+     */
+    fun toggleFold(fold: Fold) {
+        collapsed = if (collapsed.any { it == fold }) {
+            collapsed - fold
+        } else {
+            collapsed.filterNot { it.start >= fold.start && it.end <= fold.end } + fold
+        }
+    }
+
+    /** Straight to the skeleton: every widest fold at once. */
+    fun foldToSkeleton() {
+        val sentence = currentSentence() ?: return
+        collapsed = sentence.outermostFolds()
+    }
+
+    fun unfoldAll() {
+        collapsed = emptyList()
+    }
+
+    fun currentSentence(): ParsedSentence? =
+        reading?.sentences?.firstOrNull { it.ord == studiedSentence }
 
     fun toggleStar() {
         val repo = repo ?: return

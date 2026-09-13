@@ -32,7 +32,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.eitangoze.ui.AppViewModel
 import com.eitangoze.ui.screens.BrowseScreen
 import com.eitangoze.ui.screens.EntryScreen
+import com.eitangoze.ui.screens.FoldScreen
 import com.eitangoze.ui.screens.GridScreen
+import com.eitangoze.ui.screens.LibraryScreen
+import com.eitangoze.ui.screens.PassageScreen
 import com.eitangoze.ui.screens.HomeScreen
 import com.eitangoze.ui.screens.ImportScreen
 import com.eitangoze.ui.screens.ReaderScreen
@@ -66,6 +69,7 @@ private enum class Screen(val title: String) {
     HOME("Eitangoze"),
     STUDY("学習"),
     READER("読めるか測る"),
+    LIBRARY("英文を読む"),
     BROWSE("辞書"),
     IMPORT("単語帳の取り込み"),
     STATS("学習状況"),
@@ -87,6 +91,8 @@ private fun App(
     var screen by remember { mutableStateOf(Screen.HOME) }
     val detail = model.detail
     val grid = model.grid
+    val reading = model.reading
+    val sentence = model.currentSentence()
 
     // Text arriving from another app: a short selection is a lookup, anything
     // longer is a passage to measure.
@@ -121,17 +127,26 @@ private fun App(
         return
     }
 
-    val showBack = screen != Screen.HOME || detail != null || grid != null
+    val showBack = screen != Screen.HOME || detail != null || grid != null || reading != null
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(detail?.entry?.lemma ?: grid?.held ?: screen.title) },
+                title = {
+                    Text(
+                        detail?.entry?.lemma
+                            ?: grid?.held
+                            ?: reading?.passage?.title?.take(28)
+                            ?: screen.title,
+                    )
+                },
                 navigationIcon = {
                     if (showBack) {
                         IconButton(onClick = {
                             when {
                                 detail != null -> model.closeEntry()
                                 grid != null -> model.closeGrid()
+                                sentence != null -> model.closeSentence()
+                                reading != null -> model.closeReading()
                                 else -> screen = Screen.HOME
                             }
                         }) {
@@ -151,6 +166,22 @@ private fun App(
                 )
                 return@Box
             }
+            if (reading != null) {
+                if (sentence != null) {
+                    FoldScreen(
+                        reading = reading,
+                        sentence = sentence,
+                        collapsed = model.collapsed,
+                        onToggleFold = model::toggleFold,
+                        onSkeleton = model::foldToSkeleton,
+                        onUnfold = model::unfoldAll,
+                        onClose = model::closeSentence,
+                    )
+                } else {
+                    PassageScreen(model, reading, onStudySentence = model::studySentence)
+                }
+                return@Box
+            }
             if (grid != null) {
                 GridScreen(
                     grid = grid,
@@ -168,6 +199,7 @@ private fun App(
                         screen = Screen.STUDY
                     },
                     onReader = { screen = Screen.READER },
+                    onLibrary = { screen = Screen.LIBRARY },
                     onBrowse = { screen = Screen.BROWSE },
                     onImport = { screen = Screen.IMPORT },
                     onStats = { screen = Screen.STATS },
@@ -182,6 +214,7 @@ private fun App(
                     onOpenEntry = model::openEntry,
                 )
                 Screen.READER -> ReaderScreen(model, onOpenEntry = model::openEntry)
+                Screen.LIBRARY -> LibraryScreen(model, onOpen = model::openPassage)
                 Screen.BROWSE -> BrowseScreen(model, onOpenEntry = model::openEntry)
                 Screen.IMPORT -> ImportScreen(model)
                 Screen.STATS -> StatsScreen(model, onOpenEntry = model::openEntry)
