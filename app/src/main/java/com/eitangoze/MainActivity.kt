@@ -32,6 +32,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.eitangoze.ui.AppViewModel
 import com.eitangoze.ui.screens.BrowseScreen
 import com.eitangoze.ui.screens.EntryScreen
+import com.eitangoze.ui.screens.FoldScreen
+import com.eitangoze.ui.screens.GridScreen
+import com.eitangoze.ui.screens.LibraryScreen
+import com.eitangoze.ui.screens.PassageScreen
+import com.eitangoze.ui.screens.ReadingBar
+import com.eitangoze.ui.screens.ReadingResultScreen
 import com.eitangoze.ui.screens.HomeScreen
 import com.eitangoze.ui.screens.ImportScreen
 import com.eitangoze.ui.screens.ReaderScreen
@@ -65,6 +71,7 @@ private enum class Screen(val title: String) {
     HOME("Eitangoze"),
     STUDY("学習"),
     READER("読めるか測る"),
+    LIBRARY("英文を読む"),
     BROWSE("辞書"),
     IMPORT("単語帳の取り込み"),
     STATS("学習状況"),
@@ -85,6 +92,9 @@ private fun App(
 ) {
     var screen by remember { mutableStateOf(Screen.HOME) }
     val detail = model.detail
+    val grid = model.grid
+    val reading = model.reading
+    val sentence = model.currentSentence()
 
     // Text arriving from another app: a short selection is a lookup, anything
     // longer is a passage to measure.
@@ -119,15 +129,28 @@ private fun App(
         return
     }
 
-    val showBack = screen != Screen.HOME || detail != null
+    val showBack = screen != Screen.HOME || detail != null || grid != null || reading != null
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(detail?.entry?.lemma ?: screen.title) },
+                title = {
+                    Text(
+                        detail?.entry?.lemma
+                            ?: grid?.held
+                            ?: reading?.passage?.title?.take(28)
+                            ?: screen.title,
+                    )
+                },
                 navigationIcon = {
                     if (showBack) {
                         IconButton(onClick = {
-                            if (detail != null) model.closeEntry() else screen = Screen.HOME
+                            when {
+                                detail != null -> model.closeEntry()
+                                grid != null -> model.closeGrid()
+                                sentence != null -> model.closeSentence()
+                                reading != null -> model.closeReading()
+                                else -> screen = Screen.HOME
+                            }
                         }) {
                             Icon(Icons.Filled.ArrowBack, contentDescription = "戻る")
                         }
@@ -138,7 +161,66 @@ private fun App(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             if (detail != null) {
-                EntryScreen(model, detail, onOpenEntry = model::openEntry)
+                EntryScreen(
+                    model, detail,
+                    onOpenEntry = model::openEntry,
+                    onOpenAffix = model::openAffix,
+                )
+                return@Box
+            }
+            val result = model.readingResult
+            if (reading != null) {
+                when {
+                    result != null -> ReadingResultScreen(
+                        result = result,
+                        onFoldSentences = {
+                            model.dismissResult()
+                            reading.sentences.firstOrNull { it.confirmed && it.folds.isNotEmpty() }
+                                ?.let { model.studySentence(it.ord) }
+                        },
+                        onStudyGaps = {
+                            model.dismissResult()
+                            model.takeReadingGaps()
+                        },
+                        onAgain = { model.pickPassage(wantFast = result.vocabularyIsEnough) },
+                        onClose = model::closeReading,
+                        onOpenEntry = model::openEntry,
+                    )
+
+                    sentence != null -> FoldScreen(
+                        reading = reading,
+                        sentence = sentence,
+                        collapsed = model.collapsed,
+                        onToggleFold = model::toggleFold,
+                        onSkeleton = model::foldToSkeleton,
+                        onUnfold = model::unfoldAll,
+                        onClose = model::closeSentence,
+                        answers = model.syntaxAnswers,
+                        onAnswer = model::answerSyntax,
+                    )
+
+                    else -> Column(Modifier.fillMaxSize()) {
+                        Box(Modifier.weight(1f)) {
+                            PassageScreen(model, reading, onStudySentence = model::studySentence)
+                        }
+                        ReadingBar(
+                            report = model.readingReport,
+                            fit = model.readingReport?.let { model.repository?.fitOf(it.coverage) },
+                            running = model.readingStartedAt > 0L,
+                            onStart = { model.startTimer() },
+                            onStop = { model.stopTimer() },
+                        )
+                    }
+                }
+                return@Box
+            }
+            if (grid != null) {
+                GridScreen(
+                    grid = grid,
+                    onOpenEntry = model::openEntry,
+                    onFlipToAffix = model::openAffix,
+                    onFlipToStem = model::openStem,
+                )
                 return@Box
             }
             when (screen) {
@@ -149,6 +231,7 @@ private fun App(
                         screen = Screen.STUDY
                     },
                     onReader = { screen = Screen.READER },
+                    onLibrary = { screen = Screen.LIBRARY },
                     onBrowse = { screen = Screen.BROWSE },
                     onImport = { screen = Screen.IMPORT },
                     onStats = { screen = Screen.STATS },
@@ -163,6 +246,7 @@ private fun App(
                     onOpenEntry = model::openEntry,
                 )
                 Screen.READER -> ReaderScreen(model, onOpenEntry = model::openEntry)
+                Screen.LIBRARY -> LibraryScreen(model, onOpen = model::openPassage)
                 Screen.BROWSE -> BrowseScreen(model, onOpenEntry = model::openEntry)
                 Screen.IMPORT -> ImportScreen(model)
                 Screen.STATS -> StatsScreen(model, onOpenEntry = model::openEntry)

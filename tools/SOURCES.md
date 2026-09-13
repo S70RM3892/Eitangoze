@@ -16,6 +16,8 @@
 | 学術語 963 語（英語定義・日本語訳つき） | [New Academic Word List (NAWL)](https://www.newgeneralservicelist.com/new-academic-word-list) | CC BY-SA 4.0 |
 | TOEIC 頻出語 | [TOEIC Service List (TSL)](https://www.newgeneralservicelist.com/toeic-service-list) | CC BY-SA 4.0 |
 | B2 超の語の頻度順位 | [wikipedia-word-frequency](https://github.com/IlyaSemenov/wikipedia-word-frequency)（English Wikipedia 2023-04-13） | MIT |
+| 語の分解（接頭辞・語根・接尾辞）、接辞の英語定義 | [English Wiktionary](https://en.wiktionary.org/) の語源テンプレート（prefix / suffix / affix / confix）と接辞の項目 | CC BY-SA 4.0 / GFDL |
+| 接辞の日本語訳 | `tools/affix_ja.json`（本リポジトリで書き下ろし） | このリポジトリのライセンスに従う |
 | 日本語訳の並び順（常用語を先頭に） | [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html)（電子辞書研究開発グループ）の優先度タグ | CC BY-SA 4.0 |
 
 ## 引用の表記
@@ -26,6 +28,41 @@
 - Tatoeba: 例文の一部は Tatoeba Project（<https://tatoeba.org>）に由来し、CC BY 2.0 FR で提供されています。
 - Wiktionary / 日本語 WordNet: 語義と日本語訳の一部はこれらに由来します。CC BY-SA の継承条件により、
   生成された語彙データベース（`app/src/main/assets/content.dbz`）も同条件で再配布できます。
+
+## 読解用の英文（passages.dbz）
+
+アプリには英文が最初から入っています。貼らせた時点でほとんどの人は使わないからです。
+13ジャンルを3つの取得元でまかない、いずれも再配布が認められています。
+
+| ジャンル | 出典 | ライセンス |
+| --- | --- | --- |
+| 自然科学 / 技術 / 環境 / 経済 / 歴史 / 哲学 / 言語 / 芸術 / 社会 | English Wikipedia（カテゴリから、API の plaintext 抽出） | CC BY-SA 4.0 |
+| やさしい英語 | Simple English Wikipedia | CC BY-SA 4.0 |
+| 時事 | English Wikinews | CC BY 2.5 |
+| 物語・文学 / 随筆・演説 | Project Gutenberg（Gutendex 経由） | パブリックドメイン |
+| 医学・脳科学・心理 | PubMed Central のオープンアクセス集合 | 各論文の `<license>` が CC BY / CC0 のものだけ |
+
+構文解析は端末では行わず、`tools/step8_syntax.py` が spaCy で1度だけ行って木ごと同梱します。
+`en_core_web_trf` と `en_core_web_sm` はいずれも MIT です。
+
+### 取得元として採らなかったもの
+
+いずれもスクレイピングが必要で、出所を後から確かめられない英文を入れるくらいなら
+ジャンルを1つ落とすほうがよい、と判断しました。
+
+- **VOA Learning English**（パブリックドメイン）— RSS の入口が不透明な ID で、一覧の手段が公開されていない
+- **NASA / NOAA**（パブリックドメイン）— WordPress の REST 出力がサイトの付属物ばかりで、本文を掘り出す必要がある
+- **World Bank OKR**（CC BY）— 本体が PDF
+
+## 書き下ろした唯一のもの: 接辞の日本語訳
+
+Wiktionary の接辞ページは翻訳表をほとんど持たず、機械的に取れた日本語は **23 件**でした。
+接辞は「演算子」として一行で意味が出ないと分解バーも格子も成立しないため、
+ここだけは `tools/affix_ja.json` に書き下ろしています（218 項目）。
+
+市販の単語帳・語源本からの転記ではありません。書いてあるのは
+「その接辞が語に対して何をするか」の一行だけで、見出し語・語義・例文は含みません。
+この表に無い接辞は、Wiktionary の英語定義がそのまま出ます。
 
 ## 入っていないもの
 

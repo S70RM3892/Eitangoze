@@ -12,3 +12,7 @@ local.properties
 tools/raw/
 tools/cache/
 __pycache__/
+
+# Local Android SDK location (machine specific)
+local.properties
+tools/cache/

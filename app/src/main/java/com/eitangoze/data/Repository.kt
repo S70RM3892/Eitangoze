@@ -15,6 +15,7 @@ import kotlin.random.Random
 class Repository(context: Context) {
 
     val content: ContentDb = ContentDb.open(context)
+    val passages: PassageDb = PassageDb.open(context)
     private val user = UserDb(context)
     private val factory = CardFactory(content)
     private val analyzer = TextAnalyzer(content)
@@ -258,15 +259,19 @@ class Repository(context: Context) {
         val cards: List<UserDb.DueCard>,
         val family: RootFamily?,
         val familyMembers: List<Entry>,
+        /** How the word breaks up, and the meaning of each affix in it. */
+        val morphemes: List<Morpheme>,
+        val affixes: Map<Long, Affix>,
     )
 
     fun detail(entryId: Long): EntryDetail? {
         val entry = content.entry(entryId) ?: return null
         val senses = content.senses(entryId)
+        val morphemes = content.morphemes(entryId)
         return EntryDetail(
             entry = entry,
             senses = senses,
-            examplesBySense = senses.associate { it.id to content.senseExamples(it.id) },
+            examplesBySense = senses.associate { it.id to content.senseExamples(it) },
             sentences = content.sentences(entryId, limit = 5),
             collocations = content.collocations(entryId),
             relations = content.relations(entryId),
@@ -275,8 +280,279 @@ class Repository(context: Context) {
             family = entry.rootId.takeIf { it > 0 }?.let { content.family(it) },
             familyMembers = if (entry.rootId > 0) content.familyMembers(entry.rootId)
             else emptyList(),
+            morphemes = morphemes,
+            affixes = morphemes.filter { it.hasPage }
+                .mapNotNull { content.affix(it.affixId) }.associateBy { it.id },
         )
     }
+
+    // ---- the morpheme grid ---------------------------------------------------
+
+    /**
+     * One piece of a word held still, and everything that piece builds.
+     *
+     * [held] is the fixed piece; each cell's `varying` is what changes along the
+     * row and is the handle that turns the grid over. [met] is which of the
+     * words the learner has already been introduced to, so the rest can be
+     * drawn as blanks — a family two words short of complete is a finishable
+     * piece of work, which a flat list of forty words is not.
+     */
+    data class Grid(
+        val held: String,
+        val heldKind: Morpheme.Kind,
+        val heldJa: String,
+        val heldGloss: String,
+        val cells: List<GridCell>,
+        val met: Set<Long>,
+    )
+
+    fun gridForAffix(affixId: Long): Grid? {
+        val affix = content.affix(affixId) ?: return null
+        val cells = content.gridByAffix(affixId)
+        if (cells.isEmpty()) return null
+        return Grid(
+            held = affix.form,
+            heldKind = affix.kind,
+            heldJa = affix.jaLine,
+            heldGloss = affix.glossLine,
+            cells = cells,
+            met = user.metEntries(cells.map { it.entry.id }),
+        )
+    }
+
+    fun gridForStem(stem: String): Grid? {
+        val cells = content.gridByStem(stem)
+        if (cells.size < 2) return null
+        // A stem has no dictionary page of its own, so its meaning is whatever
+        // the etymology templates said about it, if anything.
+        val gloss = cells.firstNotNullOfOrNull { it.fixed.gloss.takeIf(String::isNotBlank) }
+        return Grid(
+            held = stem,
+            heldKind = Morpheme.Kind.STEM,
+            heldJa = "",
+            heldGloss = gloss.orEmpty(),
+            cells = cells,
+            met = user.metEntries(cells.map { it.entry.id }),
+        )
+    }
+
+    fun affixes() = content.affixes()
+
+    // ---- reading a shipped passage -------------------------------------------
+
+    /**
+     * A passage with its sentences, ready to be read and folded.
+     *
+     * The trees came from the build, so nothing is computed here: this only
+     * puts the two halves together and says which sentences are allowed to
+     * offer folding at all.
+     */
+    data class Reading(
+        val passage: Passage,
+        val sentences: List<ParsedSentence>,
+    ) {
+        val foldable: Int get() = sentences.count { it.confirmed && it.folds.isNotEmpty() }
+    }
+
+    fun reading(passageId: Long): Reading? {
+        val passage = passages.passage(passageId) ?: return null
+        return Reading(passage, passages.sentences(passageId))
+    }
+
+    /** The shelf, for the escape hatch: every genre and what is on it. */
+    fun shelf() = passages.shelf()
+
+    fun passageList(genre: Genre? = null, cefr: String? = null, limit: Int = 40) =
+        passages.passages(genre, cefr, limit)
+
+    // ---- reading fast --------------------------------------------------------
+
+    /** What a passage is good for right now, given what the reader knows. */
+    enum class Fit(val ja: String) {
+        /** Above the unassisted line: reading speed can actually be trained on it. */
+        FAST("速読の練習になる"),
+
+        /** Readable with effort, and every gap word is worth having. */
+        VOCABULARY("語彙を埋める"),
+
+        /** Too many unknown words for either to work. */
+        TOO_HARD("いまは難しすぎる"),
+    }
+
+    fun fitOf(coverage: Double): Fit = when {
+        coverage >= TextReport.UNASSISTED -> Fit.FAST
+        coverage >= 0.90 -> Fit.VOCABULARY
+        else -> Fit.TOO_HARD
+    }
+
+    /**
+     * A passage to read now, chosen rather than offered as a menu.
+     *
+     * Picking from a list is a decision the learner has no basis for making:
+     * nobody knows their own coverage of a text they have not read. The app
+     * does — per word, from the study database — so it can simply hand over one
+     * that is at the right height, and the shelf stays available for anyone who
+     * would rather choose.
+     *
+     * [wantFast] asks for something above the unassisted line, where training
+     * reading speed is the exercise. Otherwise the pick is the hardest passage
+     * still worth reading, because that is where the gap words are.
+     */
+    fun pickPassage(
+        wantFast: Boolean,
+        genre: Genre? = null,
+        now: Long = System.currentTimeMillis(),
+        pool: Int = 14,
+    ): Pair<Passage, TextReport>? {
+        val candidates = passages.passages(genre, limit = pool)
+        if (candidates.isEmpty()) return null
+        val measured = candidates.map { it to analyze(it.text, now) }
+        val wanted = measured.filter {
+            val fit = fitOf(it.second.coverage)
+            if (wantFast) fit == Fit.FAST else fit == Fit.VOCABULARY
+        }
+        // Nothing at the right height: the honest move is the closest thing to
+        // it, so the reader gets a passage and a straight answer about it rather
+        // than an empty screen.
+        val from = wanted.ifEmpty { measured }
+        return if (wantFast) from.maxByOrNull { it.second.coverage }
+        else from.minByOrNull { kotlin.math.abs(it.second.coverage - TextReport.UNASSISTED) }
+    }
+
+    /**
+     * What a finished reading says about the reader.
+     *
+     * Speed on its own means nothing: skimming a text you cannot read produces a
+     * fine number. The thing this app can do that a stopwatch cannot is say
+     * *which* of the three possible problems you actually have, because it knows
+     * the coverage per word and the syntax per sentence.
+     */
+    data class ReadingResult(
+        val passage: Passage,
+        val report: TextReport,
+        val elapsedMs: Long,
+        /** Sentences whose tree two parsers confirmed, out of those with folds. */
+        val checkable: Int,
+        /** Words known in one meaning and not in another; see [misreadingRisks]. */
+        val risks: List<MisreadingRisk> = emptyList(),
+    ) {
+        val wpm: Int
+            get() = if (elapsedMs <= 0) 0
+            else (passage.words * 60_000.0 / elapsedMs).toInt()
+
+        val vocabularyIsEnough: Boolean get() = report.coverage >= TextReport.UNASSISTED
+        val fastEnough: Boolean get() = wpm >= EXAM_WPM
+
+        /**
+         * The one sentence worth saying. Vocabulary first: below the unassisted
+         * line there is nothing to train, because the stops are unknown words
+         * and no amount of eye technique moves them.
+         */
+        val verdict: String
+            get() = when {
+                !vocabularyIsEnough ->
+                    "止まったのは読み方ではなく語彙です。この英文で速読の練習をしても速くなりません。"
+                !fastEnough ->
+                    "語彙は足りています。遅さの原因は語彙ではないので、ここから先が本当の速読の練習です。"
+                checkable > 0 ->
+                    "語彙も速度も入試の水準です。残るのは構文で、$checkable 文が確認できます。"
+                else -> "語彙も速度も入試の水準です。"
+            }
+    }
+
+    /**
+     * A word the reader almost certainly did not stop at, and maybe should have.
+     *
+     * Unknown words announce themselves: you meet one, you do not understand it,
+     * you look it up. A word you already know announces nothing. Read `abstract`
+     * as 抽象的な in a sentence that meant 要約 and nothing happens — no gap, no
+     * hesitation, no reason to reach for a dictionary. Misreading is not
+     * self-reported, which is why the reader cannot be their own ground truth
+     * here and why this is the one thing on the results screen that reading
+     * again would never reveal.
+     *
+     * [studied] is what they have actually been asked about; [unstudiedShare] is
+     * how much of this word's use in a sense-tagged corpus falls on meanings
+     * they have not.
+     */
+    data class MisreadingRisk(
+        val entry: Entry,
+        val studied: List<String>,
+        val unstudiedShare: Double,
+        val unstudiedSenses: Int,
+    ) {
+        val percent: Int get() = (unstudiedShare * 100).toInt()
+    }
+
+    /**
+     * Words in [report] that the reader knows one meaning of and not another.
+     *
+     * **Which** meaning the passage used is not claimed. Deciding that is word
+     * sense disambiguation, and this app cannot do it offline yet; saying "this
+     * sentence means 要約" when it does not would be worse than saying nothing.
+     * So the claim is only the one the data actually supports — there is a
+     * meaning here you have never been asked about, and it is not a rare one.
+     *
+     * Only words the reader is predicted to read count. A word they do not know
+     * is an ordinary gap and is already on the list above.
+     */
+    fun misreadingRisks(
+        report: TextReport,
+        minimumShare: Double = 0.20,
+        limit: Int = 8,
+    ): List<MisreadingRisk> {
+        val now = System.currentTimeMillis()
+        // Only words the reader is predicted to read on sight. A word they do
+        // not know announces itself and is already on the gap list.
+        val readable = report.spans
+            .filter { it.entryId != null && !it.permanent && it.readableAt(now) }
+            .mapNotNull { it.entryId }.toSet()
+        if (readable.isEmpty()) return emptyList()
+        val entries = content.entries(readable.toList()).values
+            .filter { it.kind == EntryKind.WORD }
+        if (entries.isEmpty()) return emptyList()
+        val cards = user.cardsOfEntries(entries.map { it.id })
+
+        val out = ArrayList<MisreadingRisk>()
+        for (entry in entries) {
+            val met = cards[entry.id].orEmpty()
+            if (met.isEmpty()) continue
+            val senses = content.senses(entry.id).filter { it.semcor > 0 }
+            if (senses.size < 2) continue
+            val total = senses.sumOf { it.semcor }.toDouble()
+            if (total <= 0) continue
+            val askedAbout = met.map { it.senseId }.toSet()
+            val studied = senses.filter { sense -> sense.sourceIds.any { it in askedAbout } }
+            if (studied.isEmpty()) continue
+            val unstudied = senses - studied.toSet()
+            val share = unstudied.sumOf { it.semcor } / total
+            // One big unasked meaning is the risk. A scatter of tiny ones is not:
+            // every word has a long tail, and flagging it would flag everything.
+            if (unstudied.none { it.semcor / total >= minimumShare }) continue
+            out.add(
+                MisreadingRisk(
+                    entry = entry,
+                    studied = studied.flatMap { it.ja }.distinct().take(3),
+                    unstudiedShare = share,
+                    unstudiedSenses = unstudied.size,
+                ),
+            )
+        }
+        return out.sortedByDescending { it.unstudiedShare }.take(limit)
+    }
+
+    fun finishReading(
+        passage: Passage,
+        report: TextReport,
+        elapsedMs: Long,
+    ): ReadingResult = ReadingResult(
+        passage = passage,
+        report = report,
+        elapsedMs = elapsedMs,
+        checkable = passages.sentences(passage.id)
+            .count { it.confirmed && it.folds.isNotEmpty() },
+        risks = misreadingRisks(report),
+    )
 
     fun setStarred(entryId: Long, value: Boolean) = user.setStarred(entryId, value)
 
@@ -467,6 +743,16 @@ class Repository(context: Context) {
     }
 
     companion object {
+        /**
+         * The reading speed an entrance exam asks for, in words per minute.
+         *
+         * Commonly quoted as around 150, against about 75 for an average high
+         * school student — figures that come from speed-reading providers, so
+         * they are a target to aim at rather than a measurement. The app uses it
+         * only to say which side of the line a reading fell on, never to grade.
+         */
+        const val EXAM_WPM = 150
+
         private const val KEY_RETENTION = "retention"
         private const val KEY_EXAM = "exam_date"
         private const val KEY_NEW_PER_DAY = "new_per_day"

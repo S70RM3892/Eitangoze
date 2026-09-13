@@ -201,6 +201,18 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION) 
         return out
     }
 
+    /** Which of [entryIds] the learner has met, whatever deck it came from. */
+    fun metEntries(entryIds: Collection<Long>): Set<Long> {
+        if (entryIds.isEmpty()) return emptySet()
+        val holes = entryIds.joinToString(",") { "?" }
+        val out = HashSet<Long>()
+        readableDatabase.rawQuery(
+            "SELECT DISTINCT entry_id FROM card WHERE entry_id IN ($holes)",
+            entryIds.map { it.toString() }.toTypedArray(),
+        ).use { c -> while (c.moveToNext()) out.add(c.getLong(0)) }
+        return out
+    }
+
     /** Entry ids that already have a card of [kind]; used to pick what is new. */
     fun introducedEntries(kind: CardKind, deck: String): Set<Long> {
         val out = HashSet<Long>()

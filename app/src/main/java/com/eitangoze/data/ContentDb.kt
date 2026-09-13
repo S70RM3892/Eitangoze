@@ -161,24 +161,215 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     private val senseColumns =
         "id, entry_id, ord, ja, ja_def, def_en, parent, tags, topics, syn, ant, semcor, synset"
 
+    /**
+     * The meanings of a word — one per *memory*, not one per WordNet row.
+     *
+     * WordNet splits senses far finer than a Japanese gloss can follow. Of the
+     * 3,743 words that carry sense frequencies, 1,572 (42%) have a first and a
+     * second meaning whose Japanese is the same word, and the damage shows up
+     * twice: the ratio bar on the word's page reads "為す 62% ／ 為す 32%", and
+     * the context card — which draws its wrong answers from the word's *own*
+     * other meanings — offers two options nobody can tell apart.
+     *
+     * So: **if two senses of a word share any Japanese gloss, they are one
+     * memory, and they are folded together.** Their frequencies add, their
+     * glosses and labels join, and the earliest row stands for the group, which
+     * keeps both the canonical order and the card keys already in the study
+     * database pointing somewhere real.
+     *
+     * The distinctions this app exists to teach are untouched by that rule,
+     * because genuinely different meanings get genuinely different Japanese:
+     * `spare` is 予備の ／ 惜しむ ／ 見逃す, with no word in common.
+     */
     fun senses(entryId: Long): List<Sense> {
         val out = ArrayList<Sense>()
         db.rawQuery(
             "SELECT $senseColumns FROM sense WHERE entry_id = ? ORDER BY ord",
             arrayOf(entryId.toString()),
         ).use { c -> while (c.moveToNext()) out.add(readSense(c)) }
-        return out
+        return foldSharedGlosses(out)
+    }
+
+    /** Senses of one word, grouped so that no two of them share a gloss. */
+    private fun foldSharedGlosses(senses: List<Sense>): List<Sense> {
+        if (senses.size < 2) return senses
+
+        // Union-find over "shares a Japanese gloss", keeping the lowest index as
+        // each group's root so the result stays in the database's sense order.
+        val parent = IntArray(senses.size) { it }
+        fun find(i: Int): Int {
+            var root = i
+            while (parent[root] != root) {
+                parent[root] = parent[parent[root]]
+                root = parent[root]
+            }
+            return root
+        }
+        val firstSeenAt = HashMap<String, Int>()
+        for (i in senses.indices) {
+            for (gloss in senses[i].ja) {
+                val seen = firstSeenAt[gloss]
+                if (seen == null) {
+                    firstSeenAt[gloss] = i
+                } else {
+                    val a = find(seen)
+                    val b = find(i)
+                    if (a != b) parent[maxOf(a, b)] = minOf(a, b)
+                }
+            }
+        }
+
+        val groups = LinkedHashMap<Int, MutableList<Sense>>()
+        for (i in senses.indices) groups.getOrPut(find(i)) { ArrayList() }.add(senses[i])
+        if (groups.size == senses.size) return senses
+
+        return groups.values.map { members ->
+            val head = members.first()
+            if (members.size == 1) {
+                head
+            } else {
+                head.copy(
+                    // Capped at the width a single row already uses: a merged
+                    // meaning has to stay readable as one answer on a button.
+                    ja = members.flatMap { it.ja }.distinct().take(MAX_GLOSSES),
+                    tags = members.flatMap { it.tags }.distinct(),
+                    topics = members.flatMap { it.topics }.distinct(),
+                    synonyms = members.flatMap { it.synonyms }.distinct(),
+                    antonyms = members.flatMap { it.antonyms }.distinct(),
+                    semcor = members.sumOf { it.semcor },
+                    ids = members.map { it.id },
+                )
+            }
+        }
     }
 
     fun sense(id: Long): Sense? =
         db.rawQuery("SELECT $senseColumns FROM sense WHERE id = ?", arrayOf(id.toString()))
             .use { if (it.moveToFirst()) readSense(it) else null }
 
-    fun senseExamples(senseId: Long): List<Example> {
-        val out = ArrayList<Example>()
+    // ---- morphology ---------------------------------------------------------
+
+    /** How a word breaks up, in reading order. Empty when Wiktionary never said. */
+    fun morphemes(entryId: Long): List<Morpheme> {
+        val out = ArrayList<Morpheme>()
         db.rawQuery(
-            "SELECT en, ja FROM sense_example WHERE sense_id = ?",
-            arrayOf(senseId.toString()),
+            "SELECT form, kind, affix_id, gloss FROM morph WHERE entry_id = ? ORDER BY ord",
+            arrayOf(entryId.toString()),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    Morpheme(
+                        form = c.getString(0),
+                        kind = Morpheme.Kind.of(c.getString(1)),
+                        affixId = c.getLong(2),
+                        gloss = c.getString(3),
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
+    private fun readAffix(c: Cursor) = Affix(
+        id = c.getLong(0),
+        form = c.getString(1),
+        kind = Morpheme.Kind.of(c.getString(2)),
+        gloss = c.getString(3).splitField(),
+        ja = c.getString(4).splitField(),
+        uses = c.getInt(5),
+    )
+
+    private val affixColumns = "id, form, kind, gloss, ja, uses"
+
+    fun affix(id: Long): Affix? =
+        db.rawQuery("SELECT $affixColumns FROM affix WHERE id = ?", arrayOf(id.toString()))
+            .use { if (it.moveToFirst()) readAffix(it) else null }
+
+    fun affix(form: String): Affix? =
+        db.rawQuery("SELECT $affixColumns FROM affix WHERE form = ?", arrayOf(form))
+            .use { if (it.moveToFirst()) readAffix(it) else null }
+
+    /** The affixes worth a page, the most productive first. */
+    fun affixes(kind: Morpheme.Kind? = null, limit: Int = 200): List<Affix> {
+        val out = ArrayList<Affix>()
+        val where = if (kind == null) "" else "WHERE kind = '${kind.code}' "
+        db.rawQuery(
+            "SELECT $affixColumns FROM affix ${where}ORDER BY uses DESC LIMIT ?",
+            arrayOf(limit.toString()),
+        ).use { c -> while (c.moveToNext()) out.add(readAffix(c)) }
+        return out
+    }
+
+    /**
+     * The grid, read down a stem: hold `duce` still and the prefixes line up.
+     *
+     * `reduce`, `deduce` and `produce` differ in exactly one piece, and putting
+     * that piece in a column is the thing a paper etymology book cannot do —
+     * paper has one dimension, so it can only ever list a stem's children.
+     *
+     * Stems are matched as Wiktionary spells them and are not normalised, so
+     * `duce` and `duct` stay apart. What unites *those* is the Proto-Indo-European
+     * root, which [family] already answers; inventing a stem neither word shows
+     * would be the same mistake as stripping letters off the front.
+     */
+    fun gridByStem(stem: String, limit: Int = 60): List<GridCell> =
+        grid("SELECT entry_id FROM morph WHERE form = ? AND kind = 'stem'", stem, limit) {
+            it.form == stem && it.kind == Morpheme.Kind.STEM
+        }
+
+    /**
+     * The same grid read the other way: hold `re-` still and the stems line up.
+     *
+     * This is the direction that pays. Seeing that `re-` does the same job in
+     * reduce, reject, report and resist is what makes the next unknown `re-`
+     * word guessable, and it is only visible once the axis can be flipped.
+     */
+    fun gridByAffix(affixId: Long, limit: Int = 60): List<GridCell> =
+        grid(
+            "SELECT entry_id FROM morph WHERE affix_id = ?", affixId.toString(), limit,
+        ) { it.affixId == affixId }
+
+    private fun grid(
+        sql: String,
+        arg: String,
+        limit: Int,
+        isVarying: (Morpheme) -> Boolean,
+    ): List<GridCell> {
+        val ids = ArrayList<Long>()
+        db.rawQuery("$sql LIMIT ?", arrayOf(arg, (limit * 2).toString()))
+            .use { c -> while (c.moveToNext()) ids.add(c.getLong(0)) }
+        val cells = ArrayList<GridCell>()
+        for (id in ids) {
+            val entry = entry(id) ?: continue
+            val parts = morphemes(id)
+            // Along a stem the prefix varies; along an affix the rest of the
+            // word does. Either way there must be exactly one of each or the
+            // row has nothing to say.
+            val fixed = parts.firstOrNull(isVarying) ?: continue
+            val varying = parts.firstOrNull { it !== fixed } ?: continue
+            cells.add(GridCell(entry = entry, varying = varying, fixed = fixed))
+        }
+        // Commonest words first: the grid is read top to bottom as a lesson.
+        return cells.sortedBy { it.entry.rank }.take(limit)
+    }
+
+    fun senseExamples(senseId: Long): List<Example> = senseExamples(listOf(senseId))
+
+    /**
+     * Examples for a meaning, gathered from every row behind it.
+     *
+     * A folded sense would otherwise show only the examples of the row that
+     * happened to come first, discarding the rest for no reason.
+     */
+    fun senseExamples(sense: Sense): List<Example> = senseExamples(sense.sourceIds)
+
+    private fun senseExamples(senseIds: List<Long>): List<Example> {
+        if (senseIds.isEmpty()) return emptyList()
+        val out = ArrayList<Example>()
+        val holes = senseIds.joinToString(",") { "?" }
+        db.rawQuery(
+            "SELECT en, ja FROM sense_example WHERE sense_id IN ($holes)",
+            senseIds.map { it.toString() }.toTypedArray(),
         ).use { c -> while (c.moveToNext()) out.add(Example(c.getString(0), c.getString(1))) }
         return out
     }
@@ -381,6 +572,9 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     companion object {
         /** Bumped whenever a release ships a different content database. */
         const val VERSION = 1
+
+        /** How many Japanese glosses one meaning may show. */
+        private const val MAX_GLOSSES = 5
 
         // Deliberately not named `.gz`: the Android asset merger expands any
         // asset with that extension at build time, which would put 31 MB of

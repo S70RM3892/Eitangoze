@@ -10,6 +10,9 @@ import com.eitangoze.data.AnswerMode
 import com.eitangoze.data.CardKind
 import com.eitangoze.data.Deck
 import com.eitangoze.data.Entry
+import com.eitangoze.data.Fold
+import com.eitangoze.data.Genre
+import com.eitangoze.data.ParsedSentence
 import com.eitangoze.data.Grade
 import com.eitangoze.data.GradeResult
 import com.eitangoze.data.Repository
@@ -60,6 +63,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var searchResults by mutableStateOf<List<Entry>>(emptyList())
         private set
     var detail by mutableStateOf<Repository.EntryDetail?>(null)
+
+    /** The morpheme grid, open over everything else when it is not null. */
+    var grid by mutableStateOf<Repository.Grid?>(null)
+        private set
+
+    // ---- reading a shipped passage -------------------------------------------
+
+    var reading by mutableStateOf<Repository.Reading?>(null)
+        private set
+
+    /** Which sentence the fold view is working on, or -1. */
+    var studiedSentence by mutableStateOf(-1)
+        private set
+
+    /** The subtrees currently collapsed in [studiedSentence]. */
+    var collapsed by mutableStateOf<List<Fold>>(emptyList())
+        private set
+
+    // ---- reading fast ---------------------------------------------------------
+
+    /** Coverage of the open passage, measured against this learner's memory. */
+    var readingReport by mutableStateOf<TextReport?>(null)
+        private set
+
+    /** When the reader said they started, or 0. */
+    var readingStartedAt by mutableStateOf(0L)
+        private set
+
+    var readingResult by mutableStateOf<Repository.ReadingResult?>(null)
+        private set
+
+    var pickingPassage by mutableStateOf(false)
         private set
 
     // ---- reading your own English -------------------------------------------
@@ -237,6 +272,170 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun closeEntry() {
         detail = null
     }
+
+    fun openAffix(affixId: Long) {
+        val repo = repo ?: return
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) { repo.gridForAffix(affixId) }
+            if (found != null) {
+                grid = found
+                detail = null
+            }
+        }
+    }
+
+    fun openStem(stem: String) {
+        val repo = repo ?: return
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) { repo.gridForStem(stem) }
+            if (found != null) {
+                grid = found
+                detail = null
+            }
+        }
+    }
+
+    fun closeGrid() {
+        grid = null
+    }
+
+    fun openPassage(id: Long) {
+        val repo = repo ?: return
+        viewModelScope.launch {
+            val opened = withContext(Dispatchers.IO) { repo.reading(id) }
+            reading = opened
+            studiedSentence = -1
+            collapsed = emptyList()
+            readingResult = null
+            readingStartedAt = 0L
+            readingReport = null
+            if (opened != null) {
+                readingReport = withContext(Dispatchers.IO) { repo.analyze(opened.passage.text) }
+            }
+        }
+    }
+
+    /**
+     * Ask for a passage instead of choosing one.
+     *
+     * Nobody can judge their own coverage of a text they have not read, so the
+     * choice is made from the study database rather than put to the reader.
+     */
+    fun pickPassage(wantFast: Boolean, genre: Genre? = null) {
+        val repo = repo ?: return
+        viewModelScope.launch {
+            pickingPassage = true
+            val picked = withContext(Dispatchers.IO) { repo.pickPassage(wantFast, genre) }
+            pickingPassage = false
+            if (picked == null) return@launch
+            val (passage, report) = picked
+            reading = withContext(Dispatchers.IO) { repo.reading(passage.id) }
+            readingReport = report
+            studiedSentence = -1
+            collapsed = emptyList()
+            readingResult = null
+            readingStartedAt = 0L
+        }
+    }
+
+    fun startTimer(now: Long = System.currentTimeMillis()) {
+        readingStartedAt = now
+        readingResult = null
+    }
+
+    fun stopTimer(now: Long = System.currentTimeMillis()) {
+        val repo = repo ?: return
+        val open = reading ?: return
+        val report = readingReport ?: return
+        val started = readingStartedAt
+        if (started <= 0L) return
+        viewModelScope.launch {
+            readingResult = withContext(Dispatchers.IO) {
+                repo.finishReading(open.passage, report, now - started)
+            }
+            readingStartedAt = 0L
+        }
+    }
+
+    fun dismissResult() {
+        readingResult = null
+    }
+
+    /**
+     * Put the words that block this passage into the deck, most blocking first.
+     *
+     * Only as many as it takes to reach the unassisted line. Adding every
+     * unknown word would bury the useful ones under names and one-off jargon.
+     */
+    fun takeReadingGaps() {
+        val repo = repo ?: return
+        val measured = readingReport ?: return
+        val ordered = measured.gaps.take(measured.gapsToThreshold).mapNotNull { it.entry?.id }
+        if (ordered.isEmpty()) return
+        viewModelScope.launch {
+            val added = withContext(Dispatchers.IO) { repo.pick(ordered, source = "passage") }
+            readerMessage = "$added 語を「自分の英文・単語帳から」に追加しました"
+            refresh()
+        }
+    }
+
+    fun closeReading() {
+        reading = null
+        studiedSentence = -1
+        collapsed = emptyList()
+        readingReport = null
+        readingResult = null
+        readingStartedAt = 0L
+    }
+
+    /** Answers given to the structure questions on the open sentence. */
+    var syntaxAnswers by mutableStateOf<Map<Int, Int>>(emptyMap())
+        private set
+
+    fun studySentence(ord: Int) {
+        studiedSentence = ord
+        collapsed = emptyList()
+        syntaxAnswers = emptyMap()
+    }
+
+    fun answerSyntax(question: Int, choice: Int) {
+        if (question in syntaxAnswers) return
+        syntaxAnswers = syntaxAnswers + (question to choice)
+    }
+
+    fun closeSentence() {
+        studiedSentence = -1
+        collapsed = emptyList()
+        syntaxAnswers = emptyMap()
+    }
+
+    /**
+     * Collapse a subtree, or open it again.
+     *
+     * Folding something that contains already-folded pieces absorbs them: the
+     * bigger fold is the answer to the same question, and leaving the inner
+     * marks inside it would show a `⌄` that can no longer be opened.
+     */
+    fun toggleFold(fold: Fold) {
+        collapsed = if (collapsed.any { it == fold }) {
+            collapsed - fold
+        } else {
+            collapsed.filterNot { it.start >= fold.start && it.end <= fold.end } + fold
+        }
+    }
+
+    /** Straight to the skeleton: every widest fold at once. */
+    fun foldToSkeleton() {
+        val sentence = currentSentence() ?: return
+        collapsed = sentence.outermostFolds()
+    }
+
+    fun unfoldAll() {
+        collapsed = emptyList()
+    }
+
+    fun currentSentence(): ParsedSentence? =
+        reading?.sentences?.firstOrNull { it.ord == studiedSentence }
 
     fun toggleStar() {
         val repo = repo ?: return

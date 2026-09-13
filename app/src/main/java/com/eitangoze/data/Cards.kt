@@ -35,6 +35,11 @@ data class StudyCard(
     val answerNotes: List<Pair<String, String>> = emptyList(),
     val examples: List<Example> = emptyList(),
     val checklist: List<String> = emptyList(),
+    /**
+     * Every meaning of this word with a corpus count, for the bar that opens
+     * when the answer is revealed. Empty when the word has only one.
+     */
+    val senseShare: List<Sense> = emptyList(),
 ) {
     val correctChoice: String get() = choices.getOrElse(correctIndex) { "" }
 }
@@ -78,7 +83,7 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         // confuse, and only when an example pins the one being asked about.
         if (senses.size >= 2) {
             for (sense in senses) {
-                val hasExample = content.senseExamples(sense.id).any { it.en.isNotBlank() }
+                val hasExample = content.senseExamples(sense).any { it.en.isNotBlank() }
                 if (hasExample) add(CardKind.CONTEXT, sense.id, sense.id.toString())
             }
         }
@@ -106,7 +111,10 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         val entry = content.entry(card.entryId) ?: return null
         val senses = content.senses(entry.id)
         val withJa = senses.filter { it.ja.isNotEmpty() }
-        val sense = senses.firstOrNull { it.id == card.senseId } ?: withJa.firstOrNull()
+        val sense = senses.firstOrNull { card.senseId in it.sourceIds } ?: withJa.firstOrNull()
+        // Attached to every kind in one place: the proportions belong to the
+        // word, not to the question that happened to be asked about it.
+        val share = withJa.filter { it.semcor > 0 }.takeIf { it.size >= 2 }.orEmpty()
         return when (card.kind) {
             CardKind.MEANING -> meaning(card, entry, withJa)
             CardKind.CONTEXT -> context(card, entry, withJa)
@@ -116,7 +124,7 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
             CardKind.PARTICLE -> particle(card, entry, sense ?: return null)
             CardKind.ROOT_WORD -> root(card, entry, sense ?: return null)
             CardKind.COMPOSITION -> composition(card, entry)
-        }
+        }?.copy(senseShare = share)
     }
 
     // ---- individual kinds ---------------------------------------------------
@@ -152,7 +160,7 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
             answerTitle = correct,
             answerNotes = senseNotes(sense) + senses.drop(1).take(3)
                 .map { "他の意味 ${it.ord + 1}" to it.jaLine },
-            examples = content.senseExamples(sense.id).take(2),
+            examples = content.senseExamples(sense).take(2),
         )
     }
 
@@ -163,16 +171,21 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
      * gains you nothing.
      */
     private fun context(card: UserDb.DueCard, entry: Entry, senses: List<Sense>): StudyCard? {
-        val sense = senses.firstOrNull { it.id == card.senseId } ?: return null
+        val sense = senses.firstOrNull { card.senseId in it.sourceIds } ?: return null
         if (senses.size < 2) return null
-        val example = content.senseExamples(sense.id).firstOrNull { it.en.isNotBlank() }
+        val example = content.senseExamples(sense).firstOrNull { it.en.isNotBlank() }
             ?: return null
         val correct = sense.jaLine
         // The wrong answers are the word's own other meanings and nothing else,
         // so a two-sense word gives a two-way question. That is the real task —
         // padding it out with another word's meaning would make it guessable.
-        val others = senses.filter { it.id != sense.id }.map { it.jaLine }
-            .filter { it != correct }.take(3)
+        //
+        // A wrong answer that shares a gloss with the right one is not a wrong
+        // answer, it is the same answer written twice; ContentDb.senses folds
+        // those together, and this refuses to build the question if any slip
+        // through. Better no card than a card with two correct options.
+        val others = senses.filter { it.id != sense.id && !it.sharesGloss(sense) }
+            .map { it.jaLine }.filter { it != correct }.take(3)
         if (others.isEmpty()) return null
         val choices = (listOf(correct) + others).shuffled(random)
         return StudyCard(
@@ -201,7 +214,7 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
             accepted = listOf(entry.lemma),
             answerTitle = entry.lemma,
             answerNotes = senseNotes(sense),
-            examples = content.senseExamples(sense.id).take(2),
+            examples = content.senseExamples(sense).take(2),
         )
     }
 
@@ -294,7 +307,7 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
             accepted = listOf(tail),
             answerTitle = entry.lemma,
             answerNotes = senseNotes(sense),
-            examples = content.senseExamples(sense.id).take(2) +
+            examples = content.senseExamples(sense).take(2) +
                 content.sentences(entry.id, limit = 1).map { it.example },
         )
     }
