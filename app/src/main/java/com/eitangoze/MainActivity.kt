@@ -36,6 +36,8 @@ import com.eitangoze.ui.screens.FoldScreen
 import com.eitangoze.ui.screens.GridScreen
 import com.eitangoze.ui.screens.LibraryScreen
 import com.eitangoze.ui.screens.PassageScreen
+import com.eitangoze.ui.screens.ReadingBar
+import com.eitangoze.ui.screens.ReadingResultScreen
 import com.eitangoze.ui.screens.HomeScreen
 import com.eitangoze.ui.screens.ImportScreen
 import com.eitangoze.ui.screens.ReaderScreen
@@ -166,9 +168,25 @@ private fun App(
                 )
                 return@Box
             }
+            val result = model.readingResult
             if (reading != null) {
-                if (sentence != null) {
-                    FoldScreen(
+                when {
+                    result != null -> ReadingResultScreen(
+                        result = result,
+                        onFoldSentences = {
+                            model.dismissResult()
+                            reading.sentences.firstOrNull { it.confirmed && it.folds.isNotEmpty() }
+                                ?.let { model.studySentence(it.ord) }
+                        },
+                        onStudyGaps = {
+                            model.dismissResult()
+                            model.takeReadingGaps()
+                        },
+                        onAgain = { model.pickPassage(wantFast = result.vocabularyIsEnough) },
+                        onClose = model::closeReading,
+                    )
+
+                    sentence != null -> FoldScreen(
                         reading = reading,
                         sentence = sentence,
                         collapsed = model.collapsed,
@@ -177,8 +195,19 @@ private fun App(
                         onUnfold = model::unfoldAll,
                         onClose = model::closeSentence,
                     )
-                } else {
-                    PassageScreen(model, reading, onStudySentence = model::studySentence)
+
+                    else -> Column(Modifier.fillMaxSize()) {
+                        Box(Modifier.weight(1f)) {
+                            PassageScreen(model, reading, onStudySentence = model::studySentence)
+                        }
+                        ReadingBar(
+                            report = model.readingReport,
+                            fit = model.readingReport?.let { model.repository?.fitOf(it.coverage) },
+                            running = model.readingStartedAt > 0L,
+                            onStart = { model.startTimer() },
+                            onStop = { model.stopTimer() },
+                        )
+                    }
                 }
                 return@Box
             }

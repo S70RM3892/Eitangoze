@@ -365,6 +365,111 @@ class Repository(context: Context) {
     fun passageList(genre: Genre? = null, cefr: String? = null, limit: Int = 40) =
         passages.passages(genre, cefr, limit)
 
+    // ---- reading fast --------------------------------------------------------
+
+    /** What a passage is good for right now, given what the reader knows. */
+    enum class Fit(val ja: String) {
+        /** Above the unassisted line: reading speed can actually be trained on it. */
+        FAST("速読の練習になる"),
+
+        /** Readable with effort, and every gap word is worth having. */
+        VOCABULARY("語彙を埋める"),
+
+        /** Too many unknown words for either to work. */
+        TOO_HARD("いまは難しすぎる"),
+    }
+
+    fun fitOf(coverage: Double): Fit = when {
+        coverage >= TextReport.UNASSISTED -> Fit.FAST
+        coverage >= 0.90 -> Fit.VOCABULARY
+        else -> Fit.TOO_HARD
+    }
+
+    /**
+     * A passage to read now, chosen rather than offered as a menu.
+     *
+     * Picking from a list is a decision the learner has no basis for making:
+     * nobody knows their own coverage of a text they have not read. The app
+     * does — per word, from the study database — so it can simply hand over one
+     * that is at the right height, and the shelf stays available for anyone who
+     * would rather choose.
+     *
+     * [wantFast] asks for something above the unassisted line, where training
+     * reading speed is the exercise. Otherwise the pick is the hardest passage
+     * still worth reading, because that is where the gap words are.
+     */
+    fun pickPassage(
+        wantFast: Boolean,
+        genre: Genre? = null,
+        now: Long = System.currentTimeMillis(),
+        pool: Int = 14,
+    ): Pair<Passage, TextReport>? {
+        val candidates = passages.passages(genre, limit = pool)
+        if (candidates.isEmpty()) return null
+        val measured = candidates.map { it to analyze(it.text, now) }
+        val wanted = measured.filter {
+            val fit = fitOf(it.second.coverage)
+            if (wantFast) fit == Fit.FAST else fit == Fit.VOCABULARY
+        }
+        // Nothing at the right height: the honest move is the closest thing to
+        // it, so the reader gets a passage and a straight answer about it rather
+        // than an empty screen.
+        val from = wanted.ifEmpty { measured }
+        return if (wantFast) from.maxByOrNull { it.second.coverage }
+        else from.minByOrNull { kotlin.math.abs(it.second.coverage - TextReport.UNASSISTED) }
+    }
+
+    /**
+     * What a finished reading says about the reader.
+     *
+     * Speed on its own means nothing: skimming a text you cannot read produces a
+     * fine number. The thing this app can do that a stopwatch cannot is say
+     * *which* of the three possible problems you actually have, because it knows
+     * the coverage per word and the syntax per sentence.
+     */
+    data class ReadingResult(
+        val passage: Passage,
+        val report: TextReport,
+        val elapsedMs: Long,
+        /** Sentences whose tree two parsers confirmed, out of those with folds. */
+        val checkable: Int,
+    ) {
+        val wpm: Int
+            get() = if (elapsedMs <= 0) 0
+            else (passage.words * 60_000.0 / elapsedMs).toInt()
+
+        val vocabularyIsEnough: Boolean get() = report.coverage >= TextReport.UNASSISTED
+        val fastEnough: Boolean get() = wpm >= EXAM_WPM
+
+        /**
+         * The one sentence worth saying. Vocabulary first: below the unassisted
+         * line there is nothing to train, because the stops are unknown words
+         * and no amount of eye technique moves them.
+         */
+        val verdict: String
+            get() = when {
+                !vocabularyIsEnough ->
+                    "止まったのは読み方ではなく語彙です。この英文で速読の練習をしても速くなりません。"
+                !fastEnough ->
+                    "語彙は足りています。遅さの原因は語彙ではないので、ここから先が本当の速読の練習です。"
+                checkable > 0 ->
+                    "語彙も速度も入試の水準です。残るのは構文で、$checkable 文が確認できます。"
+                else -> "語彙も速度も入試の水準です。"
+            }
+    }
+
+    fun finishReading(
+        passage: Passage,
+        report: TextReport,
+        elapsedMs: Long,
+    ): ReadingResult = ReadingResult(
+        passage = passage,
+        report = report,
+        elapsedMs = elapsedMs,
+        checkable = passages.sentences(passage.id)
+            .count { it.confirmed && it.folds.isNotEmpty() },
+    )
+
     fun setStarred(entryId: Long, value: Boolean) = user.setStarred(entryId, value)
 
     fun search(query: String) = content.search(query)
@@ -554,6 +659,16 @@ class Repository(context: Context) {
     }
 
     companion object {
+        /**
+         * The reading speed an entrance exam asks for, in words per minute.
+         *
+         * Commonly quoted as around 150, against about 75 for an average high
+         * school student — figures that come from speed-reading providers, so
+         * they are a target to aim at rather than a measurement. The app uses it
+         * only to say which side of the line a reading fell on, never to grade.
+         */
+        const val EXAM_WPM = 150
+
         private const val KEY_RETENTION = "retention"
         private const val KEY_EXAM = "exam_date"
         private const val KEY_NEW_PER_DAY = "new_per_day"

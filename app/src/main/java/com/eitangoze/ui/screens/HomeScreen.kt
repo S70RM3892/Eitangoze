@@ -84,8 +84,20 @@ fun HomeScreen(
                 ReaderInvite(onReader)
 
                 Spacer(Modifier.height(10.dp))
+                // The front door hands out a passage. Nobody can judge their own
+                // coverage of a text they have not read, so the choice is made
+                // from the study database rather than put to the reader; the
+                // shelf below is for anyone who would rather choose.
+                Button(
+                    onClick = { model.pickPassage(wantFast = true) },
+                    enabled = !model.pickingPassage,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (model.pickingPassage) "英文を選んでいます…" else "英文を計って読む")
+                }
+                Spacer(Modifier.height(6.dp))
                 OutlinedButton(onClick = onLibrary, modifier = Modifier.fillMaxWidth()) {
-                    Text("英文を読む（同梱の読解パッセージ）")
+                    Text("ジャンルから選ぶ")
                 }
 
                 Spacer(Modifier.height(12.dp))
