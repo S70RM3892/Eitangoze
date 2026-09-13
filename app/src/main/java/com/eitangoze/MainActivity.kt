@@ -184,6 +184,7 @@ private fun App(
                         },
                         onAgain = { model.pickPassage(wantFast = result.vocabularyIsEnough) },
                         onClose = model::closeReading,
+                        onOpenEntry = model::openEntry,
                     )
 
                     sentence != null -> FoldScreen(

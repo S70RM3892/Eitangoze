@@ -433,6 +433,8 @@ class Repository(context: Context) {
         val elapsedMs: Long,
         /** Sentences whose tree two parsers confirmed, out of those with folds. */
         val checkable: Int,
+        /** Words known in one meaning and not in another; see [misreadingRisks]. */
+        val risks: List<MisreadingRisk> = emptyList(),
     ) {
         val wpm: Int
             get() = if (elapsedMs <= 0) 0
@@ -458,6 +460,87 @@ class Repository(context: Context) {
             }
     }
 
+    /**
+     * A word the reader almost certainly did not stop at, and maybe should have.
+     *
+     * Unknown words announce themselves: you meet one, you do not understand it,
+     * you look it up. A word you already know announces nothing. Read `abstract`
+     * as 抽象的な in a sentence that meant 要約 and nothing happens — no gap, no
+     * hesitation, no reason to reach for a dictionary. Misreading is not
+     * self-reported, which is why the reader cannot be their own ground truth
+     * here and why this is the one thing on the results screen that reading
+     * again would never reveal.
+     *
+     * [studied] is what they have actually been asked about; [unstudiedShare] is
+     * how much of this word's use in a sense-tagged corpus falls on meanings
+     * they have not.
+     */
+    data class MisreadingRisk(
+        val entry: Entry,
+        val studied: List<String>,
+        val unstudiedShare: Double,
+        val unstudiedSenses: Int,
+    ) {
+        val percent: Int get() = (unstudiedShare * 100).toInt()
+    }
+
+    /**
+     * Words in [report] that the reader knows one meaning of and not another.
+     *
+     * **Which** meaning the passage used is not claimed. Deciding that is word
+     * sense disambiguation, and this app cannot do it offline yet; saying "this
+     * sentence means 要約" when it does not would be worse than saying nothing.
+     * So the claim is only the one the data actually supports — there is a
+     * meaning here you have never been asked about, and it is not a rare one.
+     *
+     * Only words the reader is predicted to read count. A word they do not know
+     * is an ordinary gap and is already on the list above.
+     */
+    fun misreadingRisks(
+        report: TextReport,
+        minimumShare: Double = 0.20,
+        limit: Int = 8,
+    ): List<MisreadingRisk> {
+        val now = System.currentTimeMillis()
+        // Only words the reader is predicted to read on sight. A word they do
+        // not know announces itself and is already on the gap list.
+        val readable = report.spans
+            .filter { it.entryId != null && !it.permanent && it.readableAt(now) }
+            .mapNotNull { it.entryId }.toSet()
+        if (readable.isEmpty()) return emptyList()
+        val entries = content.entries(readable.toList()).values
+            .filter { it.kind == EntryKind.WORD }
+        if (entries.isEmpty()) return emptyList()
+        val cards = user.cardsOfEntries(entries.map { it.id })
+
+        val out = ArrayList<MisreadingRisk>()
+        for (entry in entries) {
+            val met = cards[entry.id].orEmpty()
+            if (met.isEmpty()) continue
+            val senses = content.senses(entry.id).filter { it.semcor > 0 }
+            if (senses.size < 2) continue
+            val total = senses.sumOf { it.semcor }.toDouble()
+            if (total <= 0) continue
+            val askedAbout = met.map { it.senseId }.toSet()
+            val studied = senses.filter { sense -> sense.sourceIds.any { it in askedAbout } }
+            if (studied.isEmpty()) continue
+            val unstudied = senses - studied.toSet()
+            val share = unstudied.sumOf { it.semcor } / total
+            // One big unasked meaning is the risk. A scatter of tiny ones is not:
+            // every word has a long tail, and flagging it would flag everything.
+            if (unstudied.none { it.semcor / total >= minimumShare }) continue
+            out.add(
+                MisreadingRisk(
+                    entry = entry,
+                    studied = studied.flatMap { it.ja }.distinct().take(3),
+                    unstudiedShare = share,
+                    unstudiedSenses = unstudied.size,
+                ),
+            )
+        }
+        return out.sortedByDescending { it.unstudiedShare }.take(limit)
+    }
+
     fun finishReading(
         passage: Passage,
         report: TextReport,
@@ -468,6 +551,7 @@ class Repository(context: Context) {
         elapsedMs = elapsedMs,
         checkable = passages.sentences(passage.id)
             .count { it.confirmed && it.folds.isNotEmpty() },
+        risks = misreadingRisks(report),
     )
 
     fun setStarred(entryId: Long, value: Boolean) = user.setStarred(entryId, value)

@@ -1,6 +1,7 @@
 package com.eitangoze.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +55,7 @@ fun ReadingResultScreen(
     onStudyGaps: () -> Unit,
     onAgain: () -> Unit,
     onClose: () -> Unit,
+    onOpenEntry: (Long) -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     val report = result.report
@@ -123,6 +125,13 @@ fun ReadingResultScreen(
             )
         }
 
+        if (result.risks.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            Divider()
+            Spacer(Modifier.height(12.dp))
+            Misreadings(result.risks, onOpenEntry)
+        }
+
         Spacer(Modifier.height(16.dp))
         // The next move follows from the diagnosis, so it is the button that is
         // offered first.
@@ -159,6 +168,63 @@ fun ReadingResultScreen(
         )
         Spacer(Modifier.height(24.dp))
     }
+}
+
+/**
+ * The words the reader went straight past and perhaps should not have.
+ *
+ * **Which** meaning the passage used is not claimed, because the app cannot yet
+ * work that out offline and a confident wrong answer here would be worse than
+ * silence. What it does claim is the thing the data supports on its own: you
+ * have never been asked about a meaning of this word, and it is not a rare one.
+ * Tapping opens the word, where the proportions are drawn out in full.
+ */
+@Composable
+private fun Misreadings(
+    risks: List<com.eitangoze.data.Repository.MisreadingRisk>,
+    onOpenEntry: (Long) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Text("読めたつもりの語  ${risks.size}", style = MaterialTheme.typography.labelLarge,
+        color = colors.onSurfaceVariant)
+    Spacer(Modifier.height(2.dp))
+    Text(
+        "知らない語は辞書を引きます。知っているつもりの語は引きません。",
+        style = MaterialTheme.typography.bodySmall,
+        color = colors.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    risks.forEach { risk ->
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clickable { onOpenEntry(risk.entry.id) }
+                .padding(vertical = 6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(risk.entry.lemma, style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "あなたは「${risk.studied.joinToString("、")}」で学習済み",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+            Text(
+                "この語の使われ方の ${risk.percent}% は、まだ問われていない意味です" +
+                    "（${risk.unstudiedSenses} 個）",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.primary,
+            )
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "どの意味でこの文に出ていたかは言っていません。" +
+            "端末内でそれを当てる仕組みはまだ入っていないので、当てずっぽうは出しません。",
+        style = MaterialTheme.typography.labelSmall,
+        color = colors.onSurfaceVariant,
+    )
 }
 
 @Composable
