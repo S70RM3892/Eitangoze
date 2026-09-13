@@ -1,17 +1,27 @@
 package com.eitangoze.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -32,13 +42,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.eitangoze.data.AnswerMode
@@ -49,12 +62,25 @@ import com.eitangoze.srs.Rating
 import com.eitangoze.ui.AppViewModel
 import com.eitangoze.ui.theme.Marks
 
+/** How much of the card area the answer sheet takes when it is up. */
+private const val SHEET_HEIGHT = 0.62f
+
+/** Names the answer sheet so a test can measure where it actually landed. */
+const val ANSWER_SHEET_TAG = "answer-sheet"
+
 /**
- * One question at a time: prompt, answer, grade.
+ * One question, one screen.
  *
- * The answer half is always shown *after* committing — typing then revealing,
- * or choosing then seeing — because the value of the whole exercise comes from
- * having tried to recall before being told.
+ * The screen is three fixed bands and never scrolls as a whole: the question
+ * holds the space above, the rating buttons stay pinned under the thumb, and
+ * the answer *rises* into the gap between them when you commit. Scrolling to
+ * find out whether you were right costs a gesture on every single card, and a
+ * session is a hundred cards; the answer has to arrive where the eye already
+ * is.
+ *
+ * The answer half is still shown only *after* committing — typing then
+ * revealing, or choosing then seeing — because the value of the whole exercise
+ * comes from having tried to recall before being told.
  */
 @Composable
 fun StudyScreen(model: AppViewModel, onFinished: () -> Unit, onOpenEntry: (Long) -> Unit) {
@@ -63,75 +89,116 @@ fun StudyScreen(model: AppViewModel, onFinished: () -> Unit, onOpenEntry: (Long)
         SessionSummary(model, onFinished)
         return
     }
-    val answer = model.answer
-    val scroll = rememberScrollState()
-    LaunchedEffect(model.position) { scroll.scrollTo(0) }
-
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().imePadding()) {
         LinearProgressIndicator(
             progress = { (model.position.toFloat() / model.queue.size.coerceAtLeast(1)) },
             modifier = Modifier.fillMaxWidth(),
         )
-        Column(
-            Modifier
-                .weight(1f)
-                .verticalScroll(scroll)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Chip(card.kind.title, MaterialTheme.colorScheme.primaryContainer,
-                        MaterialTheme.colorScheme.onPrimaryContainer)
-                    LevelChip(card.entry)
-                }
-                Text(
-                    "${model.position + 1} / ${model.queue.size}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
 
-            Spacer(Modifier.height(14.dp))
-            Text(
-                card.instruction,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            Prompt(card)
+        CardArea(model, card, onOpenEntry, Modifier.weight(1f))
 
-            Spacer(Modifier.height(16.dp))
-            when (card.mode) {
-                AnswerMode.CHOICE -> Choices(model, card)
-                AnswerMode.TYPE -> TypeAnswer(model, card)
-                AnswerMode.SELF_CHECK -> SelfCheck(model, card)
-            }
-
-            if (answer.revealed) {
-                Spacer(Modifier.height(18.dp))
-                Divider()
-                Spacer(Modifier.height(12.dp))
-                AnswerPanel(card, onOpenEntry)
-            }
-            Spacer(Modifier.height(24.dp))
-        }
         Divider()
         Controls(model, card, onFinished)
+    }
+}
+
+/**
+ * The question, with the answer sheet able to rise over its lower half.
+ *
+ * Its own function so that the only implicit receiver here is the Box: inside
+ * a Column, `AnimatedVisibility` resolves to the ColumnScope overload, which
+ * cannot be aligned to the bottom of anything.
+ */
+@Composable
+private fun CardArea(
+    model: AppViewModel,
+    card: StudyCard,
+    onOpenEntry: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        // The question can be scrolled clear of the sheet, so it needs exactly
+        // the sheet's height as bottom room — a fixed number would leave the
+        // last option unreachable on a short screen.
+        Question(model, card, bottomInset = maxHeight * SHEET_HEIGHT)
+
+        // The sheet covers the lower part of the question rather than pushing
+        // it off the top, so the sentence you just judged is still on screen
+        // while you read what it meant.
+        AnimatedVisibility(
+            visible = model.answer.revealed,
+            enter = slideInVertically(tween(220)) { it } + fadeIn(tween(220)),
+            exit = slideOutVertically(tween(140)) { it } + fadeOut(tween(140)),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            AnswerSheet(model, card, onOpenEntry)
+        }
+    }
+}
+
+/** The question, laid out to fit. It scrolls only when it genuinely cannot. */
+@Composable
+private fun Question(model: AppViewModel, card: StudyCard, bottomInset: Dp) {
+    val scroll = rememberScrollState()
+    LaunchedEffect(model.position) { scroll.scrollTo(0) }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Chip(card.kind.title, MaterialTheme.colorScheme.primaryContainer,
+                    MaterialTheme.colorScheme.onPrimaryContainer)
+                LevelChip(card.entry)
+            }
+            Text(
+                "${model.position + 1} / ${model.queue.size}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Text(
+            card.instruction,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(10.dp))
+        Prompt(card)
+
+        Spacer(Modifier.height(16.dp))
+        when (card.mode) {
+            AnswerMode.CHOICE -> Choices(model, card)
+            AnswerMode.TYPE -> TypeAnswer(model, card)
+            AnswerMode.SELF_CHECK -> SelfCheck(model, card)
+        }
+        // Room for the sheet to rise into without hiding the last option.
+        Spacer(Modifier.height(if (model.answer.revealed) bottomInset else 24.dp))
     }
 }
 
 @Composable
 private fun Prompt(card: StudyCard) {
     val big = card.prompt.length <= 24 && !card.prompt.contains(' ')
+    // A long prompt is a sentence to read, not a word to stare at: it gets the
+    // smaller size so that the whole card still fits on one screen.
+    val size = when {
+        big -> 34.sp
+        card.prompt.length > 120 -> 17.sp
+        else -> 21.sp
+    }
     Text(
         card.prompt,
-        fontSize = if (big) 34.sp else 21.sp,
+        fontSize = size,
         fontWeight = if (big) FontWeight.SemiBold else FontWeight.Normal,
-        lineHeight = if (big) 40.sp else 30.sp,
+        lineHeight = size * 1.35f,
     )
     if (card.promptJa.isNotBlank()) {
         Spacer(Modifier.height(8.dp))
@@ -179,7 +246,6 @@ private fun Choices(model: AppViewModel, card: StudyCard) {
             ) {
                 Text("${index + 1}", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(0.dp))
                 Text(
                     "  $text",
                     style = MaterialTheme.typography.bodyLarge,
@@ -242,70 +308,109 @@ private fun SelfCheck(model: AppViewModel, card: StudyCard) {
         minLines = 3,
         modifier = Modifier.fillMaxWidth(),
     )
-    if (answer.revealed) {
-        Spacer(Modifier.height(14.dp))
-        Text("模範解答", style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(card.answerTitle, style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.height(12.dp))
-        Text("自己採点", style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        card.checklist.forEachIndexed { index, point ->
-            Row(
-                Modifier.fillMaxWidth().clickable { model.toggleCheck(index) },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Checkbox(checked = index in answer.checked,
-                    onCheckedChange = { model.toggleCheck(index) })
-                Text(point, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-    }
 }
 
+/**
+ * What the answer was, risen into place over the question.
+ *
+ * Everything the learner might want *after* committing lives here and nowhere
+ * else — the word, the meaning, the grammar labels, the examples — so the
+ * question above it never has to make room for any of it.
+ */
 @Composable
-private fun AnswerPanel(card: StudyCard, onOpenEntry: (Long) -> Unit) {
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                card.entry.lemma,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable { onOpenEntry(card.entry.id) },
+private fun AnswerSheet(model: AppViewModel, card: StudyCard, onOpenEntry: (Long) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val answer = model.answer
+    val shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+    Column(
+        Modifier
+            .testTag(ANSWER_SHEET_TAG)
+            .fillMaxWidth()
+            .fillMaxHeight(SHEET_HEIGHT)
+            .shadow(14.dp, shape)
+            .clip(shape)
+            .background(colors.surface),
+    ) {
+        // A short bar at the top, so the sheet reads as a thing that arrived
+        // rather than as more page.
+        Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .width(36.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(colors.outlineVariant),
             )
-            Chip(card.entry.pos.ja)
-            if (card.entry.ipa.isNotBlank()) {
-                Text(card.entry.ipa, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Column(
+            Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    card.entry.lemma,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clickable { onOpenEntry(card.entry.id) },
+                )
+                Chip(card.entry.pos.ja)
+                if (card.entry.ipa.isNotBlank()) {
+                    Text(card.entry.ipa, style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant)
+                }
             }
-        }
-        if (card.answerTitle.isNotBlank() && card.mode != AnswerMode.SELF_CHECK) {
-            Spacer(Modifier.height(6.dp))
-            Text(card.answerTitle, style = MaterialTheme.typography.titleMedium)
-        }
-        Spacer(Modifier.height(8.dp))
-        card.answerNotes.forEach { (label, value) -> LabelValue(label, value) }
-        if (card.examples.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Section("例文") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    card.examples.take(3).forEach { example ->
-                        Column {
-                            Text(example.en, style = MaterialTheme.typography.bodyMedium)
-                            if (example.ja.isNotBlank()) {
-                                Text(
-                                    example.ja,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+            if (card.answerTitle.isNotBlank() && card.mode != AnswerMode.SELF_CHECK) {
+                Spacer(Modifier.height(6.dp))
+                Text(card.answerTitle, style = MaterialTheme.typography.titleMedium)
+            }
+
+            if (card.mode == AnswerMode.SELF_CHECK) {
+                Spacer(Modifier.height(8.dp))
+                Text("模範解答", style = MaterialTheme.typography.labelLarge,
+                    color = colors.onSurfaceVariant)
+                Text(card.answerTitle, style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.height(12.dp))
+                Text("自己採点", style = MaterialTheme.typography.labelLarge,
+                    color = colors.onSurfaceVariant)
+                card.checklist.forEachIndexed { index, point ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { model.toggleCheck(index) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = index in answer.checked,
+                            onCheckedChange = { model.toggleCheck(index) })
+                        Text(point, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            card.answerNotes.forEach { (label, value) -> LabelValue(label, value) }
+
+            if (card.examples.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Section("例文") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        card.examples.take(3).forEach { example ->
+                            Column {
+                                Text(example.en, style = MaterialTheme.typography.bodyMedium)
+                                if (example.ja.isNotBlank()) {
+                                    Text(
+                                        example.ja,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colors.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+            TextButton(onClick = { onOpenEntry(card.entry.id) }) { Text("この語の詳細を見る") }
         }
-        TextButton(onClick = { onOpenEntry(card.entry.id) }) { Text("この語の詳細を見る") }
     }
 }
 
