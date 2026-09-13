@@ -397,6 +397,15 @@ fun PassageScreen(
         )
         Spacer(Modifier.height(14.dp))
 
+        // A passage whose tree has not been built yet still reads: parsing is
+        // hours behind collection, and showing nothing would be a blank screen
+        // for a passage that is perfectly fine to read.
+        if (reading.sentences.isEmpty()) {
+            Text(
+                passage.text,
+                style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 30.sp),
+            )
+        }
         reading.sentences.forEach { sentence ->
             val canFold = sentence.confirmed && sentence.folds.isNotEmpty()
             Text(

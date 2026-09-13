@@ -151,13 +151,37 @@ def pack_roles(roles):
 
 
 def main():
-    src = os.path.join(CACHE, "syntax.jsonl")
-    if not os.path.exists(src):
-        print("run tools/step8_syntax.py first", file=sys.stderr)
+    collected = os.path.join(CACHE, "passages.jsonl")
+    parsed_path = os.path.join(CACHE, "syntax.jsonl")
+    if not os.path.exists(collected):
+        print("run tools/step7_passages.py first", file=sys.stderr)
         return 1
-    with open(src, encoding="utf-8") as f:
-        passages = [json.loads(line) for line in f]
-    print(f"{len(passages):,} passages")
+
+    # Trees where we have them, the passage anyway where we do not. Parsing is
+    # hours and collection is minutes, so the two will always be out of step;
+    # dropping the unparsed ones would mean a stopped parse silently shrinking
+    # the library, and a passage without a tree still reads perfectly — it just
+    # never offers to fold itself.
+    trees = {}
+    if os.path.exists(parsed_path):
+        with open(parsed_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    p = json.loads(line)
+                except ValueError:
+                    continue
+                trees[p["url"] + p["title"]] = p.get("sentences") or []
+    passages = []
+    with open(collected, encoding="utf-8") as f:
+        for line in f:
+            try:
+                p = json.loads(line)
+            except ValueError:
+                continue
+            p["sentences"] = trees.get(p["url"] + p["title"], [])
+            passages.append(p)
+    with_trees = sum(1 for p in passages if p["sentences"])
+    print(f"{len(passages):,} passages, {with_trees:,} parsed")
 
     levels, forms = load_levels()
     print(f"  {len(levels):,} headwords and {len(forms):,} inflections for levelling")
@@ -220,6 +244,8 @@ def main():
     print(f"\n{len(passage_rows):,} passages / {words:,} running words")
     print(f"{len(sentence_rows):,} sentences, {agreed:,} confirmed by both parsers "
           f"({agreed * 100 // max(1, len(sentence_rows))}%), {folds:,} folds")
+    print(f"{with_trees:,}/{len(passages):,} passages carry a tree; the rest read "
+          f"normally and simply do not fold")
     print(f"  dictionary covers {ceiling * 100:.1f}% of running words on average")
     print("  levels " + "  ".join(f"{k} {by_level[k]}" for k in CEFR_ORDER if by_level[k]))
     print("  genres " + "  ".join(f"{k} {v}" for k, v in by_genre.most_common()))

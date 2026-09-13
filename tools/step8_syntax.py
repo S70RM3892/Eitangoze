@@ -25,6 +25,7 @@ A tree that wrong would teach the opposite of the lesson. So the transformer
 parses, the small model checks, and a sentence they disagree about is still
 read — it is simply never folded.
 """
+import argparse
 import json
 import os
 import sys
@@ -139,6 +140,7 @@ def confirm(sentence, folds, roles, other):
 
 
 def parse(passages, batch=16):
+    """Yields each parsed passage as it finishes, so callers can write as they go."""
     import spacy
 
     print("loading parsers", flush=True)
@@ -148,7 +150,6 @@ def parse(passages, batch=16):
     texts = [p["text"] for p in passages]
     done = 0
     agreed_total = sentence_total = 0
-    out = []
     for passage, doc, doc2 in zip(
         passages,
         main.pipe(texts, batch_size=batch),
@@ -178,34 +179,57 @@ def parse(passages, batch=16):
             })
             sentence_total += 1
             agreed_total += agreed
-        out.append(dict(passage, sentences=sentences))
+        yield dict(passage, sentences=sentences)
 
         done += 1
-        if done % 50 == 0:
+        if done % 25 == 0:
             print(f"  {done:,}/{len(passages):,} passages, "
                   f"{agreed_total:,}/{sentence_total:,} sentences agreed", flush=True)
 
     print(f"\n{sentence_total:,} sentences, {agreed_total:,} agreed "
           f"({agreed_total * 100 // max(1, sentence_total)}%)")
-    return out
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=0,
+                        help="stop after this many newly parsed passages")
+    parser.add_argument("--restart", action="store_true")
+    args = parser.parse_args()
+
     src = os.path.join(CACHE, "passages.jsonl")
     if not os.path.exists(src):
         print("run tools/step7_passages.py first", file=sys.stderr)
         return 1
     with open(src, encoding="utf-8") as f:
         passages = [json.loads(line) for line in f]
-    print(f"{len(passages):,} passages to parse")
 
-    parsed = parse(passages)
-    with open(os.path.join(CACHE, "syntax.jsonl"), "w", encoding="utf-8") as dst:
-        for passage in parsed:
+    out_path = os.path.join(CACHE, "syntax.jsonl")
+    if args.restart and os.path.exists(out_path):
+        os.remove(out_path)
+    done = set()
+    if os.path.exists(out_path):
+        with open(out_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    done.add(json.loads(line)["url"] + json.loads(line)["title"])
+                except Exception:  # noqa: BLE001 - a half-written last line
+                    continue
+    todo = [p for p in passages if p["url"] + p["title"] not in done]
+    if args.limit:
+        todo = todo[:args.limit]
+    print(f"{len(passages):,} passages, {len(done):,} already parsed, "
+          f"{len(todo):,} to do")
+    if not todo:
+        return 0
+
+    # Parsing is the slow half — a transformer manages about 700 words a second
+    # on this machine, so a full library is hours. Appended and flushed as each
+    # passage finishes, so stopping it costs only the passage in flight.
+    with open(out_path, "a", encoding="utf-8") as dst:
+        for passage in parse(todo):
             dst.write(json.dumps(passage, ensure_ascii=False) + "\n")
-
-    foldable = sum(len(s["folds"]) for p in parsed for s in p["sentences"] if s["agreed"])
-    print(f"{foldable:,} foldable subtrees on sentences both parsers agree about")
+            dst.flush()
     return 0
 
 

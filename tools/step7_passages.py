@@ -28,7 +28,13 @@ and a passage nobody can check the provenance of is worse than one fewer genre:
                         the article body has to be dug out of it
   World Bank OKR        CC BY, but the corpus is PDF-first
 
-Usage:  python3 tools/step7_passages.py [--target N] [--genre NAME]
+Written one passage at a time, and safe to interrupt. The first full run took
+over an hour and wrote nothing when it was stopped, because it held everything
+in memory until the end — an hour of public API calls thrown away, and worse,
+no way to tell how far it had got. Every passage is now appended and flushed as
+it arrives, and re-running skips what is already on disk.
+
+Usage:  python3 tools/step7_passages.py [--target N] [--genre NAME] [--restart]
 """
 import argparse
 import json
@@ -455,8 +461,8 @@ GENRES = [
 ]
 
 
-def collect(genre_id, label, kind, seeds, budget):
-    print(f"  {genre_id} ({label})", flush=True)
+def collect(genre_id, label, kind, seeds, budget, seen=()):
+    print(f"  {genre_id} ({label}) — want {budget} more", flush=True)
     got = []
     for seed in seeds:
         if len(got) >= budget:
@@ -476,40 +482,68 @@ def collect(genre_id, label, kind, seeds, budget):
             got += gutenberg_passages(seed, genre_id, limit=max(8, want // 3))[:want]
         elif kind == "pmc":
             got += pmc_passages(seed, genre_id, limit=max(10, want))[:want]
+        got = [p for p in got if p["url"] + p["title"] not in seen]
         print(f"    {seed[:44]:46s} → {len(got)}", flush=True)
     return got[:budget]
 
 
+def load_existing(path):
+    """What is already collected, so a second run adds rather than repeats."""
+    seen, by_genre = set(), {}
+    if not os.path.exists(path):
+        return seen, by_genre
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                passage = json.loads(line)
+            except ValueError:
+                continue
+            seen.add(passage["url"] + passage["title"])
+            by_genre[passage["genre"]] = by_genre.get(passage["genre"], 0) + 1
+    return seen, by_genre
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--target", type=int, default=3000,
+    parser.add_argument("--target", type=int, default=8000,
                         help="how many passages to collect in total")
     parser.add_argument("--genre", default=None, help="collect only this genre id")
+    parser.add_argument("--restart", action="store_true",
+                        help="throw away what is already collected and start over")
     args = parser.parse_args()
 
     os.makedirs(CACHE, exist_ok=True)
+    path = os.path.join(CACHE, "passages.jsonl")
+    if args.restart and os.path.exists(path):
+        os.remove(path)
+
     genres = [g for g in GENRES if args.genre in (None, g[0])]
     budget = max(1, args.target // max(1, len(genres)))
+    seen, have = load_existing(path)
+    if seen:
+        print(f"already collected {len(seen):,}: "
+              + "  ".join(f"{k} {v}" for k, v in sorted(have.items())))
 
-    out, seen = [], set()
-    for genre_id, label, kind, seeds in genres:
-        for passage in collect(genre_id, label, kind, seeds, budget):
-            key = passage["url"] + passage["title"]
-            if key in seen:
+    added = 0
+    # Appended and flushed one passage at a time. An interrupted run keeps
+    # everything it had already fetched, and re-running continues from there.
+    with open(path, "a", encoding="utf-8") as dst:
+        for genre_id, label, kind, seeds in genres:
+            done = have.get(genre_id, 0)
+            if done >= budget:
+                print(f"  {genre_id} ({label}) — already {done}, skipping")
                 continue
-            seen.add(key)
-            out.append(passage)
+            for passage in collect(genre_id, label, kind, seeds, budget - done, seen):
+                key = passage["url"] + passage["title"]
+                if key in seen:
+                    continue
+                seen.add(key)
+                dst.write(json.dumps(passage, ensure_ascii=False) + "\n")
+                dst.flush()
+                added += 1
 
-    path = os.path.join(CACHE, "passages.jsonl")
-    with open(path, "w", encoding="utf-8") as dst:
-        for passage in out:
-            dst.write(json.dumps(passage, ensure_ascii=False) + "\n")
-
-    by_genre = {}
-    for passage in out:
-        by_genre[passage["genre"]] = by_genre.get(passage["genre"], 0) + 1
-    print(f"\n{len(out):,} passages, "
-          f"{sum(words(p['text']) for p in out):,} running words")
+    total, by_genre = load_existing(path)
+    print(f"\nadded {added:,}; library now {len(total):,} passages")
     for genre_id, count in sorted(by_genre.items(), key=lambda kv: -kv[1]):
         print(f"  {genre_id:12s} {count}")
     return 0
