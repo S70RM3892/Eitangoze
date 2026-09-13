@@ -2,6 +2,7 @@ package com.eitangoze
 
 import androidx.test.core.app.ApplicationProvider
 import com.eitangoze.data.Fold
+import com.eitangoze.data.Genre
 import com.eitangoze.data.PassageDb
 import com.eitangoze.data.ParsedSentence
 import org.junit.After
@@ -46,9 +47,15 @@ class PassageDbTest {
             assertTrue("${passage.title} has no source", passage.source.isNotBlank())
             assertTrue("${passage.title} has no licence", passage.license.isNotBlank())
             assertTrue("${passage.title} has no link", passage.url.startsWith("http"))
-            // A passage shorter than this is not the exercise, and one longer is
-            // two of them. 京大 2026 set 730 and 580 words.
-            assertTrue("${passage.title} is ${passage.words} words", passage.words in 380..1200)
+            // A passage shorter than this is not the exercise, and one longer
+            // is two of them. 京大 2026 set 730 and 580 words. Simple English is
+            // the exception: it is written short on purpose, and holding it to
+            // an exam passage's length leaves one article in the encyclopaedia.
+            val floor = if (passage.genre == Genre.PLAIN) 200 else 380
+            assertTrue(
+                "${passage.title} (${passage.genre.code}) is ${passage.words} words",
+                passage.words in floor..1200,
+            )
             assertTrue(
                 "${passage.title} claims to cover ${passage.coverable}",
                 passage.coverable in 0.5..1.0,
