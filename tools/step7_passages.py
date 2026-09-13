@@ -197,15 +197,43 @@ def clean_wiki(text):
     return "\n\n".join(kept)
 
 
-def wiki_passages(site, titles, genre, licence, batch=12, minimum=MIN_WORDS):
-    out = []
+def extracts(site, titles, batch=12):
+    """Plain-text extracts for a list of titles, following continuations.
+
+    Asking for twelve titles does not get twelve extracts. The API answers with
+    the first page filled in, the rest `extract: null`, and a continuation
+    token — and a caller that ignores the token silently keeps one page in
+    twelve. That is what happened on the first full run: Wikipedia genres asked
+    for 571 passages and came back with between 89 and 186, and Wikinews, whose
+    articles are short enough that only the occasional one survives the length
+    filter anyway, came back with five.
+    """
+    out = {}
     for start in range(0, len(titles), batch):
         chunk = titles[start:start + batch]
-        data = wiki_api(
-            site, prop="extracts", explaintext="1", exlimit=str(len(chunk)),
+        params = dict(
+            prop="extracts", explaintext="1", exlimit=str(len(chunk)),
             titles="|".join(chunk), redirects="1",
         )
-        for page in ((data or {}).get("query", {}).get("pages") or {}).values():
+        for _ in range(batch + 2):
+            data = wiki_api(site, **params)
+            if not data:
+                break
+            for page in ((data.get("query") or {}).get("pages") or {}).values():
+                if page.get("extract"):
+                    out[page.get("title", "")] = page
+            token = data.get("continue") or {}
+            if "excontinue" not in token:
+                break
+            params["excontinue"] = token["excontinue"]
+            params["continue"] = token.get("continue", "||")
+    return out
+
+
+def wiki_passages(site, titles, genre, licence, batch=12, minimum=MIN_WORDS):
+    out = []
+    if True:
+        for page in extracts(site, titles, batch).values():
             extract = page.get("extract") or ""
             text = clean_wiki(extract)
             if not minimum <= words(text) <= MAX_WORDS:
@@ -462,29 +490,40 @@ GENRES = [
 
 
 def collect(genre_id, label, kind, seeds, budget, seen=()):
+    """Yields passages as each seed finishes, so the caller can write them out.
+
+    A generator rather than a list because a genre is not a small unit of work:
+    Gutenberg's essay seeds take the better part of an hour between them, and
+    returning a list meant an interrupted run threw away everything collected
+    since the last genre boundary. Per seed is as fine as this can honestly get
+    — a seed is one call into a source — and it is the difference between losing
+    forty minutes and losing four.
+    """
     print(f"  {genre_id} ({label}) — want {budget} more", flush=True)
-    got = []
+    taken = 0
     for seed in seeds:
-        if len(got) >= budget:
+        if taken >= budget:
             break
-        want = budget - len(got)
+        want = budget - taken
+        got = []
         if kind == "wiki":
-            got += wiki_passages(WIKI, category_titles(WIKI, seed)[:want * 3],
-                                 genre_id, CC_BY_SA)[:want]
+            got = wiki_passages(WIKI, category_titles(WIKI, seed)[:want * 3],
+                                genre_id, CC_BY_SA)[:want]
         elif kind == "simple":
-            got += wiki_passages(SIMPLE, category_titles(SIMPLE, seed)[:want * 6],
-                                 genre_id, CC_BY_SA, minimum=PLAIN_MIN_WORDS)[:want]
+            got = wiki_passages(SIMPLE, category_titles(SIMPLE, seed)[:want * 6],
+                                genre_id, CC_BY_SA, minimum=PLAIN_MIN_WORDS)[:want]
         elif kind == "wikinews":
             site = "en.wikinews.org"
-            got += wiki_passages(site, category_titles(site, seed)[:want * 4],
-                                 genre_id, "CC BY 2.5")[:want]
+            got = wiki_passages(site, category_titles(site, seed)[:want * 4],
+                                genre_id, "CC BY 2.5")[:want]
         elif kind == "gutenberg":
-            got += gutenberg_passages(seed, genre_id, limit=max(8, want // 3))[:want]
+            got = gutenberg_passages(seed, genre_id, limit=max(8, want // 3))[:want]
         elif kind == "pmc":
-            got += pmc_passages(seed, genre_id, limit=max(10, want))[:want]
-        got = [p for p in got if p["url"] + p["title"] not in seen]
-        print(f"    {seed[:44]:46s} → {len(got)}", flush=True)
-    return got[:budget]
+            got = pmc_passages(seed, genre_id, limit=max(10, want))[:want]
+        got = [p for p in got if p["url"] + p["title"] not in seen][:want]
+        taken += len(got)
+        print(f"    {seed[:44]:46s} → {taken}", flush=True)
+        yield from got
 
 
 def load_existing(path):
