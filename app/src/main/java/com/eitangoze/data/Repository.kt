@@ -258,11 +258,15 @@ class Repository(context: Context) {
         val cards: List<UserDb.DueCard>,
         val family: RootFamily?,
         val familyMembers: List<Entry>,
+        /** How the word breaks up, and the meaning of each affix in it. */
+        val morphemes: List<Morpheme>,
+        val affixes: Map<Long, Affix>,
     )
 
     fun detail(entryId: Long): EntryDetail? {
         val entry = content.entry(entryId) ?: return null
         val senses = content.senses(entryId)
+        val morphemes = content.morphemes(entryId)
         return EntryDetail(
             entry = entry,
             senses = senses,
@@ -275,8 +279,63 @@ class Repository(context: Context) {
             family = entry.rootId.takeIf { it > 0 }?.let { content.family(it) },
             familyMembers = if (entry.rootId > 0) content.familyMembers(entry.rootId)
             else emptyList(),
+            morphemes = morphemes,
+            affixes = morphemes.filter { it.hasPage }
+                .mapNotNull { content.affix(it.affixId) }.associateBy { it.id },
         )
     }
+
+    // ---- the morpheme grid ---------------------------------------------------
+
+    /**
+     * One piece of a word held still, and everything that piece builds.
+     *
+     * [held] is the fixed piece; each cell's `varying` is what changes along the
+     * row and is the handle that turns the grid over. [met] is which of the
+     * words the learner has already been introduced to, so the rest can be
+     * drawn as blanks — a family two words short of complete is a finishable
+     * piece of work, which a flat list of forty words is not.
+     */
+    data class Grid(
+        val held: String,
+        val heldKind: Morpheme.Kind,
+        val heldJa: String,
+        val heldGloss: String,
+        val cells: List<GridCell>,
+        val met: Set<Long>,
+    )
+
+    fun gridForAffix(affixId: Long): Grid? {
+        val affix = content.affix(affixId) ?: return null
+        val cells = content.gridByAffix(affixId)
+        if (cells.isEmpty()) return null
+        return Grid(
+            held = affix.form,
+            heldKind = affix.kind,
+            heldJa = affix.jaLine,
+            heldGloss = affix.glossLine,
+            cells = cells,
+            met = user.metEntries(cells.map { it.entry.id }),
+        )
+    }
+
+    fun gridForStem(stem: String): Grid? {
+        val cells = content.gridByStem(stem)
+        if (cells.size < 2) return null
+        // A stem has no dictionary page of its own, so its meaning is whatever
+        // the etymology templates said about it, if anything.
+        val gloss = cells.firstNotNullOfOrNull { it.fixed.gloss.takeIf(String::isNotBlank) }
+        return Grid(
+            held = stem,
+            heldKind = Morpheme.Kind.STEM,
+            heldJa = "",
+            heldGloss = gloss.orEmpty(),
+            cells = cells,
+            met = user.metEntries(cells.map { it.entry.id }),
+        )
+    }
+
+    fun affixes() = content.affixes()
 
     fun setStarred(entryId: Long, value: Boolean) = user.setStarred(entryId, value)
 

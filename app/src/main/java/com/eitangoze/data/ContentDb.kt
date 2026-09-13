@@ -247,6 +247,112 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
         db.rawQuery("SELECT $senseColumns FROM sense WHERE id = ?", arrayOf(id.toString()))
             .use { if (it.moveToFirst()) readSense(it) else null }
 
+    // ---- morphology ---------------------------------------------------------
+
+    /** How a word breaks up, in reading order. Empty when Wiktionary never said. */
+    fun morphemes(entryId: Long): List<Morpheme> {
+        val out = ArrayList<Morpheme>()
+        db.rawQuery(
+            "SELECT form, kind, affix_id, gloss FROM morph WHERE entry_id = ? ORDER BY ord",
+            arrayOf(entryId.toString()),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    Morpheme(
+                        form = c.getString(0),
+                        kind = Morpheme.Kind.of(c.getString(1)),
+                        affixId = c.getLong(2),
+                        gloss = c.getString(3),
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
+    private fun readAffix(c: Cursor) = Affix(
+        id = c.getLong(0),
+        form = c.getString(1),
+        kind = Morpheme.Kind.of(c.getString(2)),
+        gloss = c.getString(3).splitField(),
+        ja = c.getString(4).splitField(),
+        uses = c.getInt(5),
+    )
+
+    private val affixColumns = "id, form, kind, gloss, ja, uses"
+
+    fun affix(id: Long): Affix? =
+        db.rawQuery("SELECT $affixColumns FROM affix WHERE id = ?", arrayOf(id.toString()))
+            .use { if (it.moveToFirst()) readAffix(it) else null }
+
+    fun affix(form: String): Affix? =
+        db.rawQuery("SELECT $affixColumns FROM affix WHERE form = ?", arrayOf(form))
+            .use { if (it.moveToFirst()) readAffix(it) else null }
+
+    /** The affixes worth a page, the most productive first. */
+    fun affixes(kind: Morpheme.Kind? = null, limit: Int = 200): List<Affix> {
+        val out = ArrayList<Affix>()
+        val where = if (kind == null) "" else "WHERE kind = '${kind.code}' "
+        db.rawQuery(
+            "SELECT $affixColumns FROM affix ${where}ORDER BY uses DESC LIMIT ?",
+            arrayOf(limit.toString()),
+        ).use { c -> while (c.moveToNext()) out.add(readAffix(c)) }
+        return out
+    }
+
+    /**
+     * The grid, read down a stem: hold `duce` still and the prefixes line up.
+     *
+     * `reduce`, `deduce` and `produce` differ in exactly one piece, and putting
+     * that piece in a column is the thing a paper etymology book cannot do —
+     * paper has one dimension, so it can only ever list a stem's children.
+     *
+     * Stems are matched as Wiktionary spells them and are not normalised, so
+     * `duce` and `duct` stay apart. What unites *those* is the Proto-Indo-European
+     * root, which [family] already answers; inventing a stem neither word shows
+     * would be the same mistake as stripping letters off the front.
+     */
+    fun gridByStem(stem: String, limit: Int = 60): List<GridCell> =
+        grid("SELECT entry_id FROM morph WHERE form = ? AND kind = 'stem'", stem, limit) {
+            it.form == stem && it.kind == Morpheme.Kind.STEM
+        }
+
+    /**
+     * The same grid read the other way: hold `re-` still and the stems line up.
+     *
+     * This is the direction that pays. Seeing that `re-` does the same job in
+     * reduce, reject, report and resist is what makes the next unknown `re-`
+     * word guessable, and it is only visible once the axis can be flipped.
+     */
+    fun gridByAffix(affixId: Long, limit: Int = 60): List<GridCell> =
+        grid(
+            "SELECT entry_id FROM morph WHERE affix_id = ?", affixId.toString(), limit,
+        ) { it.affixId == affixId }
+
+    private fun grid(
+        sql: String,
+        arg: String,
+        limit: Int,
+        isVarying: (Morpheme) -> Boolean,
+    ): List<GridCell> {
+        val ids = ArrayList<Long>()
+        db.rawQuery("$sql LIMIT ?", arrayOf(arg, (limit * 2).toString()))
+            .use { c -> while (c.moveToNext()) ids.add(c.getLong(0)) }
+        val cells = ArrayList<GridCell>()
+        for (id in ids) {
+            val entry = entry(id) ?: continue
+            val parts = morphemes(id)
+            // Along a stem the prefix varies; along an affix the rest of the
+            // word does. Either way there must be exactly one of each or the
+            // row has nothing to say.
+            val fixed = parts.firstOrNull(isVarying) ?: continue
+            val varying = parts.firstOrNull { it !== fixed } ?: continue
+            cells.add(GridCell(entry = entry, varying = varying, fixed = fixed))
+        }
+        // Commonest words first: the grid is read top to bottom as a lesson.
+        return cells.sortedBy { it.entry.rank }.take(limit)
+    }
+
     fun senseExamples(senseId: Long): List<Example> = senseExamples(listOf(senseId))
 
     /**

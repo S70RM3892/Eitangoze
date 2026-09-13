@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.eitangoze.data.CardFactory
@@ -43,7 +44,12 @@ import com.eitangoze.ui.AppViewModel
  * counts, not an editor's ordering.
  */
 @Composable
-fun EntryScreen(model: AppViewModel, detail: Repository.EntryDetail, onOpenEntry: (Long) -> Unit) {
+fun EntryScreen(
+    model: AppViewModel,
+    detail: Repository.EntryDetail,
+    onOpenEntry: (Long) -> Unit,
+    onOpenAffix: (Long) -> Unit = {},
+) {
     val entry = detail.entry
     Column(
         Modifier
@@ -73,6 +79,8 @@ fun EntryScreen(model: AppViewModel, detail: Repository.EntryDetail, onOpenEntry
         TextButton(onClick = { model.toggleStar() }) {
             Text(if (detail.starred) "★ 覚えておく" else "☆ 覚えておく")
         }
+
+        Decomposition(detail, onOpenAffix)
 
         SenseShare(detail.senses)
 
@@ -191,6 +199,79 @@ fun EntryScreen(model: AppViewModel, detail: Repository.EntryDetail, onOpenEntry
  * Only drawn when the corpus actually has counts for this word. Inventing a
  * split for a word nobody tagged would be the most misleading thing on the page.
  */
+/**
+ * The word cut into its pieces, laid side by side above everything else.
+ *
+ * `introduction` is intro- ＋ duc ＋ -tion, and each piece is worth its own
+ * page: the stem carries the meaning, the affixes operate on it. Reading the
+ * row left to right is reading how the word was assembled, which is the only
+ * reliable way to guess at the next word built the same way.
+ *
+ * The cut is Wiktionary's own, never a guess: a rule that strips letters off
+ * the front would break `region` into re- ＋ gion and teach a lie.
+ */
+@Composable
+private fun Decomposition(detail: Repository.EntryDetail, onOpenAffix: (Long) -> Unit) {
+    val parts = detail.morphemes
+    if (parts.size < 2) return
+    val colors = MaterialTheme.colorScheme
+    Spacer(Modifier.height(12.dp))
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        parts.forEach { part ->
+            val affix = detail.affixes[part.affixId]
+            // An affix with a page is tinted and tappable; a stem is quiet, and
+            // so is an affix Wiktionary never defined well enough to explain.
+            val background =
+                if (affix != null) colors.primaryContainer else colors.surfaceVariant
+            val label = affix?.jaLine?.takeIf { it.isNotBlank() }
+                ?: affix?.glossLine?.takeIf { it.isNotBlank() }
+                ?: part.gloss
+            Column(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(background)
+                    .then(
+                        if (affix != null) Modifier.clickable { onOpenAffix(affix.id) }
+                        else Modifier,
+                    )
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    part.form,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = if (affix != null) colors.onPrimaryContainer else colors.onSurface,
+                )
+                if (label.isNotBlank()) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+    }
+    val readable = parts.mapNotNull { part ->
+        detail.affixes[part.affixId]?.ja?.firstOrNull() ?: part.gloss.takeIf { it.isNotBlank() }
+    }
+    if (readable.size == parts.size) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            readable.joinToString(" ＋ "),
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun SenseShare(senses: List<Sense>) {
     val counted = senses.filter { it.semcor > 0 }

@@ -60,6 +60,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var searchResults by mutableStateOf<List<Entry>>(emptyList())
         private set
     var detail by mutableStateOf<Repository.EntryDetail?>(null)
+
+    /** The morpheme grid, open over everything else when it is not null. */
+    var grid by mutableStateOf<Repository.Grid?>(null)
         private set
 
     // ---- reading your own English -------------------------------------------
@@ -236,6 +239,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun closeEntry() {
         detail = null
+    }
+
+    fun openAffix(affixId: Long) {
+        val repo = repo ?: return
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) { repo.gridForAffix(affixId) }
+            if (found != null) {
+                grid = found
+                detail = null
+            }
+        }
+    }
+
+    fun openStem(stem: String) {
+        val repo = repo ?: return
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) { repo.gridForStem(stem) }
+            if (found != null) {
+                grid = found
+                detail = null
+            }
+        }
+    }
+
+    fun closeGrid() {
+        grid = null
     }
 
     fun toggleStar() {

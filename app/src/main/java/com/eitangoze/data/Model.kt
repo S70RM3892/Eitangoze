@@ -133,6 +133,66 @@ data class RootFamily(
     val label: String get() = if (form.isBlank()) pattern else "$lang $form"
 }
 
+/**
+ * A piece of a word: a prefix, the stem, or a suffix.
+ *
+ * The cut comes from Wiktionary's own etymology, never from stripping letters
+ * off the front of a word — that turns `region` into re- + gion and teaches
+ * something false. [affixId] is 0 for a stem, and for an affix Wiktionary does
+ * not define well enough to give a page of its own.
+ */
+data class Morpheme(
+    val form: String,
+    val kind: Kind,
+    val affixId: Long,
+    /** What the etymology template said this piece means, if it said anything. */
+    val gloss: String,
+) {
+    enum class Kind(val code: String, val ja: String) {
+        PREFIX("prefix", "接頭辞"),
+        STEM("stem", "語根"),
+        SUFFIX("suffix", "接尾辞"),
+        INTERFIX("interfix", "連結辞");
+
+        companion object {
+            private val byCode = entries.associateBy { it.code }
+            fun of(code: String): Kind = byCode[code] ?: STEM
+        }
+    }
+
+    val isAffix: Boolean get() = kind != Kind.STEM
+    val hasPage: Boolean get() = affixId != 0L
+}
+
+/**
+ * An affix as a thing in its own right: `re-`, `-tion`, `un-`.
+ *
+ * The app treats a stem as *meaning* and an affix as an *operator* on it, which
+ * is what makes the grid possible — hold the stem still and the prefixes line
+ * up, hold the prefix still and the stems do. [uses] is how many headwords it
+ * builds, and is the whole reason it is worth a page.
+ */
+data class Affix(
+    val id: Long,
+    val form: String,
+    val kind: Morpheme.Kind,
+    val gloss: List<String>,
+    val ja: List<String>,
+    val uses: Int,
+) {
+    val jaLine: String get() = ja.joinToString("、")
+    val glossLine: String get() = gloss.joinToString("; ")
+}
+
+/** One cell of the grid: a word, and the piece that varies along the axis. */
+data class GridCell(
+    val entry: Entry,
+    /** The piece being varied — a prefix when the stem is held still. */
+    val varying: Morpheme,
+    /** The piece held still. */
+    val fixed: Morpheme,
+)
+
 data class Collocation(
     val entryId: Long,
     val pattern: String,

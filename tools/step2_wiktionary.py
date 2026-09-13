@@ -58,6 +58,114 @@ KEEP_TAGS = {
 PHRASE_CATEGORIES = ("English phrasal verbs", "English idioms", "English proverbs")
 WORD_RE = re.compile(r"^[a-z][a-z'\-]*$")
 PHRASE_RE = re.compile(r"^[a-z][a-z' \-]*$")
+
+# --- morphology -------------------------------------------------------------
+#
+# A word breaks into a stem that carries the meaning and affixes that operate on
+# it: intro- + duc + -tion. Wiktionary writes those breaks down itself, in the
+# etymology templates, which is the only reason this can be done without
+# guessing — a rule that strips letters off the front of words turns `region`
+# into re- + gion and teaches something false.
+
+# Templates that state a decomposition. `prefix` and `suffix` name the affix in
+# one argument and the rest in the others; `affix` and `confix` spell every part
+# out with its own hyphens.
+AFFIX_TEMPLATES = {
+    "prefix": "prefix", "pre": "prefix",
+    "suffix": "suffix", "suf": "suffix",
+    "affix": "affix", "af": "affix",
+    "confix": "confix", "con": "confix",
+    "circumfix": "confix",
+}
+# Wiktionary annotates an argument in place: `non-<id:not>`, `back<t:rear>`.
+ANNOTATION_RE = re.compile(r"<[^>]*>")
+# Wiktionary's own entries for the affixes, which is where their meanings come
+# from. Kept separately from the words: an affix is not a word to learn, it is
+# the operator that explains a hundred of them.
+AFFIX_POS = {"prefix", "suffix", "affix", "interfix", "infix", "circumfix"}
+AFFIX_RE = re.compile(r"^(-[a-z][a-z-]{0,14}|[a-z][a-z-]{0,14}-)$")
+
+
+def segment_of(form, gloss):
+    """One piece of a word, labelled by where its hyphen is."""
+    # Arguments sometimes carry a link fragment: `-y#etymology_3`.
+    form = (form or "").split("#", 1)[0].strip().lower()
+    if not form or form.strip("-") == "":
+        return None
+    if form.startswith("-") and form.endswith("-"):
+        kind = "interfix"
+    elif form.startswith("-"):
+        kind = "suffix"
+    elif form.endswith("-"):
+        kind = "prefix"
+    else:
+        kind = "stem"
+    return {"form": form, "kind": kind, "gloss": (gloss or "").strip()}
+
+
+def pick_affixes(entry):
+    """How this word breaks up, straight from Wiktionary's own etymology.
+
+    Returns the pieces in the order they appear in the word, each tagged as a
+    prefix, a stem or a suffix. Only the *first* decomposition template is read:
+    an etymology may chain several, but the first one states how this word was
+    built, and the rest describe how its parent was.
+    """
+    for t in entry.get("etymology_templates") or []:
+        shape = AFFIX_TEMPLATES.get(t.get("name"))
+        if not shape:
+            continue
+        args = t.get("args") or {}
+        if (args.get("1") or "") != "en":
+            continue
+        # Argument 1 is the language and the parts run from 2 upwards, but the
+        # glosses are numbered by *part*: the word at argument 2 is glossed by
+        # t1 or gloss1. Getting that off by one silently labels every piece with
+        # its neighbour's meaning.
+        parts = []
+        for i in range(2, 9):
+            form = ANNOTATION_RE.sub("", args.get(str(i)) or "").strip()
+            if not form:
+                break
+            gloss = args.get(f"t{i - 1}") or args.get(f"gloss{i - 1}") or ""
+            parts.append((form, ANNOTATION_RE.sub("", gloss).strip()))
+        if len(parts) < 2:
+            continue
+        # Each template writes its hyphens differently, and some write none at
+        # all: {{suffix|en|connote|ation}} and {{suf|en|abduce|-tion}} are the
+        # same statement. Put them back on from the template's own shape.
+        if shape == "prefix":
+            parts[0] = (parts[0][0].rstrip("-") + "-", parts[0][1])
+        elif shape == "suffix":
+            parts[1:] = [("-" + f.lstrip("-"), g) for f, g in parts[1:]]
+        elif shape == "confix":
+            # A confix is an affix at each end with, sometimes, a stem between.
+            parts[0] = (parts[0][0].rstrip("-") + "-", parts[0][1])
+            parts[-1] = ("-" + parts[-1][0].lstrip("-"), parts[-1][1])
+        out = [s for s in (segment_of(f, g) for f, g in parts) if s]
+        # A decomposition with no affix in it is a compound, not morphology we
+        # can teach as an operator; leave those to the word-family view.
+        if len(out) >= 2 and any(s["kind"] != "stem" for s in out):
+            return out
+    return None
+
+
+def affix_entry(entry, word):
+    """Wiktionary's entry *for* an affix, reduced to what the grid needs."""
+    senses = []
+    for s in entry.get("senses") or []:
+        gloss = clean_gloss((s.get("glosses") or [""])[-1])
+        if gloss and not any(t in DROP_TAGS for t in s.get("tags") or []):
+            senses.append(gloss)
+    if not senses:
+        return None
+    _, entry_ja = japanese_translations(entry, len(entry.get("senses") or []))
+    return {
+        "w": word,
+        "pos": entry.get("pos"),
+        "gloss": senses[:3],
+        "ja": [t["ja"] for t in entry_ja][:4],
+    }
 GLOSS_CLEAN = re.compile(r"\s+")
 
 
@@ -285,6 +393,7 @@ def main():
         candidates = set(json.load(f))
 
     kept = phrases = scanned = 0
+    affixes = {}
     out_path = os.path.join(CACHE, "wikt.jsonl")
     with open(os.path.join(RAW, "kaikki-en.jsonl"), "rb") as src, \
             open(out_path, "w", encoding="utf-8") as dst:
@@ -297,10 +406,18 @@ def main():
                 entry = loads(line)
             except Exception:
                 continue
+            word = (entry.get("word") or "").strip().lower()
+            # Affixes come through this same file, as entries of their own, and
+            # are collected before the part-of-speech filter drops them: they
+            # are not words to teach, they are what explains the words.
+            if entry.get("pos") in AFFIX_POS and AFFIX_RE.match(word):
+                found = affix_entry(entry, word)
+                if found and word not in affixes:
+                    affixes[word] = found
+                continue
             pos = POS_KEEP.get(entry.get("pos"))
             if not pos:
                 continue
-            word = (entry.get("word") or "").strip()
             multiword = " " in word
             if multiword:
                 if not PHRASE_RE.match(word) or word.count(" ") > 4:
@@ -355,6 +472,7 @@ def main():
                 "w": word, "pos": pos, "kind": kind or "word",
                 "ipa": pick_ipa(entry), "forms": pick_forms(entry),
                 "etym": pick_etymology(entry),
+                "affix": pick_affixes(entry),
                 "senses": senses,
                 "ja": entry_ja[:8],
                 "derived": related_words(entry, "derived"),
@@ -365,7 +483,12 @@ def main():
             dst.write(json.dumps(rec, ensure_ascii=False) + "\n")
             kept += 1
 
+    with open(os.path.join(CACHE, "affixes.jsonl"), "w", encoding="utf-8") as dst:
+        for word in sorted(affixes):
+            dst.write(json.dumps(affixes[word], ensure_ascii=False) + "\n")
+
     print(f"scanned {scanned:,} entries, kept {kept:,} ({phrases:,} multi-word)")
+    print(f"affixes: {len(affixes):,}")
     return 0
 
 

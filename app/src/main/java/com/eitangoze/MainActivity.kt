@@ -32,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.eitangoze.ui.AppViewModel
 import com.eitangoze.ui.screens.BrowseScreen
 import com.eitangoze.ui.screens.EntryScreen
+import com.eitangoze.ui.screens.GridScreen
 import com.eitangoze.ui.screens.HomeScreen
 import com.eitangoze.ui.screens.ImportScreen
 import com.eitangoze.ui.screens.ReaderScreen
@@ -85,6 +86,7 @@ private fun App(
 ) {
     var screen by remember { mutableStateOf(Screen.HOME) }
     val detail = model.detail
+    val grid = model.grid
 
     // Text arriving from another app: a short selection is a lookup, anything
     // longer is a passage to measure.
@@ -119,15 +121,19 @@ private fun App(
         return
     }
 
-    val showBack = screen != Screen.HOME || detail != null
+    val showBack = screen != Screen.HOME || detail != null || grid != null
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(detail?.entry?.lemma ?: screen.title) },
+                title = { Text(detail?.entry?.lemma ?: grid?.held ?: screen.title) },
                 navigationIcon = {
                     if (showBack) {
                         IconButton(onClick = {
-                            if (detail != null) model.closeEntry() else screen = Screen.HOME
+                            when {
+                                detail != null -> model.closeEntry()
+                                grid != null -> model.closeGrid()
+                                else -> screen = Screen.HOME
+                            }
                         }) {
                             Icon(Icons.Filled.ArrowBack, contentDescription = "戻る")
                         }
@@ -138,7 +144,20 @@ private fun App(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             if (detail != null) {
-                EntryScreen(model, detail, onOpenEntry = model::openEntry)
+                EntryScreen(
+                    model, detail,
+                    onOpenEntry = model::openEntry,
+                    onOpenAffix = model::openAffix,
+                )
+                return@Box
+            }
+            if (grid != null) {
+                GridScreen(
+                    grid = grid,
+                    onOpenEntry = model::openEntry,
+                    onFlipToAffix = model::openAffix,
+                    onFlipToStem = model::openStem,
+                )
                 return@Box
             }
             when (screen) {

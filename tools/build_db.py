@@ -93,7 +93,14 @@ def load_cache():
             wikt.append(json.loads(line))
     with open(os.path.join(CACHE, "wordnet.json"), encoding="utf-8") as f:
         wn = json.load(f)
-    return lists, wikt, wn
+    affixes = {}
+    path = os.path.join(CACHE, "affixes.jsonl")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                a = json.loads(line)
+                affixes[a["w"]] = a
+    return lists, wikt, wn, affixes
 
 
 # --------------------------------------------------------------------------
@@ -415,6 +422,7 @@ def select_entries(lists, wikt, wn, phrase_counts):
             "lemma": lemma, "pos": pos, "kind": kind, "cefr": cefr, "cefr_est": est,
             "sort": sort_key, "freq": freq, "lists": tags, "ipa": entry["ipa"],
             "forms": entry["forms"], "etym": entry["etym"], "senses": senses,
+            "affix": entry.get("affix"),
             "derived": entry["derived"], "related": entry["related"],
             "syn": entry["syn"], "ant": entry["ant"],
         })
@@ -874,6 +882,91 @@ def lexical_relations(entries):
 
 
 # --------------------------------------------------------------------------
+# morphology
+
+
+# An affix nobody reuses explains nothing: the point of showing `re-` is that it
+# does the same job in thirty other words. Below this it is trivia.
+MIN_AFFIX_USES = 4
+
+
+def load_affix_japanese():
+    """Japanese for the productive affixes; see tools/affix_ja.json for why."""
+    path = os.path.join(HERE, "affix_ja.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return {k: v for k, v in json.load(f).items() if not k.startswith("_")}
+
+
+def build_morphology(entries, affix_defs, common, affix_ja=None):
+    """Cut words into prefix + stem + suffix, and index the affixes by use.
+
+    The decompositions come from Wiktionary's own etymology templates (see
+    `step2_wiktionary.pick_affixes`), so nothing here guesses where a word
+    breaks. What is decided here is which affixes are worth showing: one that
+    appears in three words is a curiosity, not an operator.
+
+    Stems are kept as Wiktionary spells them, and not normalised. `reduce` and
+    `conduct` really do descend through different Latin stems (duce, duct); the
+    thing that unites them is the Proto-Indo-European root, which `entry.root_id`
+    already carries. Flattening the two spellings together here would invent a
+    stem that neither word actually shows.
+    """
+    affix_ja = affix_ja or {}
+    uses = collections.Counter()
+    cut = {}
+    for e in entries:
+        parts = e.get("affix")
+        if not parts:
+            continue
+        cut[e["id"]] = parts
+        for p in parts:
+            if p["kind"] != "stem":
+                uses[p["form"]] += 1
+
+    affix_rows, affix_id = [], {}
+    for form, count in uses.most_common():
+        if count < MIN_AFFIX_USES:
+            continue
+        found = affix_defs.get(form)
+        written = affix_ja.get(form)
+        # Something has to be able to say what it does. Wiktionary's own entry
+        # is preferred for the English; the Japanese is almost never there (23
+        # affixes had any), so it comes from the written table instead.
+        if not found and not written:
+            continue
+        gloss = (found or {}).get("gloss") or []
+        ja = [written] if written else order_japanese((found or {}).get("ja") or [], common)
+        if not gloss and not ja:
+            continue
+        affix_id[form] = len(affix_rows) + 1
+        affix_rows.append((
+            affix_id[form], form, kind_of_affix(form),
+            join(gloss[:3]), join(ja[:4]), count,
+        ))
+
+    morph_rows = []
+    for entry_id, parts in cut.items():
+        # A cut whose affixes are all too rare to have a page leaves the word
+        # with nothing to point at; it is not worth a row.
+        if not any(affix_id.get(p["form"]) for p in parts if p["kind"] != "stem"):
+            continue
+        for ord_, p in enumerate(parts):
+            morph_rows.append((
+                entry_id, ord_, p["form"], p["kind"],
+                affix_id.get(p["form"], 0), p["gloss"],
+            ))
+    return affix_rows, morph_rows
+
+
+def kind_of_affix(form):
+    if form.startswith("-") and form.endswith("-"):
+        return "interfix"
+    return "suffix" if form.startswith("-") else "prefix"
+
+
+# --------------------------------------------------------------------------
 # writing
 
 
@@ -975,6 +1068,34 @@ CREATE TABLE surface (
 );
 CREATE INDEX surface_form ON surface(form);
 
+-- The pieces words are built from. `affix` is the operator (re-, -tion) with
+-- its own meaning; `morph` is one word cut into pieces, in reading order. Two
+-- tables rather than one because the app reads them from both ends: down a
+-- word to show how it breaks up, and across an affix to show every word it
+-- builds. That second direction is the one paper cannot do.
+CREATE TABLE affix (
+  id INTEGER PRIMARY KEY,
+  form TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  gloss TEXT NOT NULL,
+  ja TEXT NOT NULL,
+  uses INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX affix_form ON affix(form);
+CREATE INDEX affix_uses ON affix(kind, uses DESC);
+
+CREATE TABLE morph (
+  entry_id INTEGER NOT NULL,
+  ord INTEGER NOT NULL,
+  form TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  affix_id INTEGER NOT NULL,
+  gloss TEXT NOT NULL
+);
+CREATE INDEX morph_entry ON morph(entry_id, ord);
+CREATE INDEX morph_affix ON morph(affix_id);
+CREATE INDEX morph_stem ON morph(form, kind);
+
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -984,7 +1105,7 @@ def join(items):
 
 
 def write_db(path, entries, sentences, links, colls, relations, roots, root_ids,
-             surfaces, common=()):
+             surfaces, common=(), affix_rows=(), morph_rows=()):
     if os.path.exists(path):
         os.remove(path)
     db = sqlite3.connect(path)
@@ -1031,6 +1152,8 @@ def write_db(path, entries, sentences, links, colls, relations, roots, root_ids,
     db.executemany("INSERT INTO relation VALUES (?,?,?)", relations)
     db.executemany("INSERT INTO root VALUES (?,?,?,?,?,?)", roots)
     db.executemany("INSERT INTO surface VALUES (?,?,?)", surfaces)
+    db.executemany("INSERT INTO affix VALUES (?,?,?,?,?,?)", affix_rows)
+    db.executemany("INSERT INTO morph VALUES (?,?,?,?,?,?)", morph_rows)
     db.executemany("INSERT INTO meta VALUES (?,?)", [
         ("entries", str(len(entry_rows))),
         ("senses", str(len(sense_rows))),
@@ -1038,6 +1161,8 @@ def write_db(path, entries, sentences, links, colls, relations, roots, root_ids,
         ("collocations", str(len(colls))),
         ("surfaces", str(len(surfaces))),
         ("roots", str(len(roots))),
+        ("affixes", str(len(affix_rows))),
+        ("morphs", str(len({m[0] for m in morph_rows}))),
         ("schema", "1"),
     ])
     db.commit()
@@ -1048,11 +1173,11 @@ def write_db(path, entries, sentences, links, colls, relations, roots, root_ids,
 
 def main():
     print("loading cache")
-    lists, wikt, wn = load_cache()
+    lists, wikt, wn, affix_defs = load_cache()
     common = load_common_japanese()
     print(f"  {len(common):,} everyday Japanese words for ordering glosses")
     print(f"  {len(lists):,} candidates, {len(wikt):,} Wiktionary entries, "
-          f"{len(wn):,} WordNet keys")
+          f"{len(wn):,} WordNet keys, {len(affix_defs):,} affixes")
 
     print("counting phrases in the corpus")
     forms = inflection_map(wikt)
@@ -1082,12 +1207,18 @@ def main():
     print("building relations")
     root_rows, root_ids = root_families(entries)
     relations = confusable_pairs(entries) + lexical_relations(entries)
+    print("cutting words into morphemes")
+    affix_rows, morph_rows = build_morphology(entries, affix_defs, common,
+                                              load_affix_japanese())
+    print(f"  {len(affix_rows):,} affixes worth a page, "
+          f"{len({m[0] for m in morph_rows}):,} words cut")
 
     os.makedirs(ASSETS, exist_ok=True)
     tmp = os.path.join(CACHE, "content.db")
     surfaces = surface_rows(entries, forms_of_lemma(wikt))
     n_entry, n_sense, n_ex = write_db(tmp, entries, sentences, links, colls,
-                                      relations, root_rows, root_ids, surfaces, common)
+                                      relations, root_rows, root_ids, surfaces, common,
+                                      affix_rows, morph_rows)
     # Not `.gz`: the Android asset merger expands assets with that extension.
     out = os.path.join(ASSETS, "content.dbz")
     with open(tmp, "rb") as src, gzip.open(out, "wb", compresslevel=9) as dst:

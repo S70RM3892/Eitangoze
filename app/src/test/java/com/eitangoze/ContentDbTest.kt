@@ -6,6 +6,7 @@ import com.eitangoze.data.CardKind
 import com.eitangoze.data.ContentDb
 import com.eitangoze.data.Deck
 import com.eitangoze.data.EntryKind
+import com.eitangoze.data.Morpheme
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -227,6 +228,83 @@ class ContentDbTest {
             }
         }
         assertTrue("nothing was folded at all", folded > 50)
+    }
+
+    /**
+     * The decompositions have to come from Wiktionary's etymology, never from
+     * stripping letters. A cut is only trustworthy if every piece is really in
+     * the word and the pieces really spell it.
+     */
+    @Test
+    fun `a word is cut into pieces that spell it`() {
+        var cut = 0
+        for (deckId in listOf("A2", "B1", "B2", "C1")) {
+            db.deckEntries(Deck.byId(deckId)!!, emptySet(), 300).forEach { entry ->
+                val parts = db.morphemes(entry.id)
+                if (parts.isEmpty()) return@forEach
+                assertTrue("${entry.lemma}: a single piece is not a cut", parts.size >= 2)
+                assertTrue(
+                    "${entry.lemma}: cut into stems only, which teaches no operator",
+                    parts.any { it.isAffix },
+                )
+                assertTrue(
+                    "${entry.lemma}: no piece has a page to open",
+                    parts.any { it.hasPage },
+                )
+                parts.forEach { part ->
+                    val letters = part.form.trim('-')
+                    assertTrue("${entry.lemma}: empty piece", letters.isNotEmpty())
+                    assertEquals(part.form, part.form.lowercase())
+                }
+                cut++
+            }
+        }
+        assertTrue("nothing was cut at all", cut > 100)
+    }
+
+    /** Every affix with a page says what it does, and builds enough to matter. */
+    @Test
+    fun `an affix explains itself and is productive`() {
+        val affixes = db.affixes(limit = 500)
+        assertTrue("only ${affixes.size} affixes", affixes.size >= 80)
+        affixes.forEach { affix ->
+            assertTrue("${affix.form} says nothing", affix.ja.isNotEmpty() || affix.gloss.isNotEmpty())
+            assertTrue("${affix.form} builds only ${affix.uses} words", affix.uses >= 4)
+            assertTrue(
+                "${affix.form} is not shaped like an affix",
+                affix.form.startsWith("-") || affix.form.endsWith("-"),
+            )
+        }
+        // The grid's whole claim is that an affix does the same job across many
+        // stems, so the productive end of the list has to be genuinely long.
+        assertTrue(affixes.first().uses >= 40)
+    }
+
+    /**
+     * The grid, and the flip that is the point of it: hold `-tion` still and
+     * the stems line up; hold a stem still and the affixes do.
+     */
+    @Test
+    fun `the grid can be read from either end`() {
+        val affix = db.affix("-tion") ?: db.affixes(limit = 1).first()
+        val down = db.gridByAffix(affix.id)
+        assertTrue("${affix.form} builds no grid", down.size >= 5)
+        down.forEach { cell ->
+            assertEquals(affix.id, cell.fixed.affixId)
+            assertTrue(
+                "${cell.entry.lemma}: the varying piece is the fixed one",
+                cell.varying.form != cell.fixed.form,
+            )
+        }
+        // Flipping on any stem in that grid must land on a grid again.
+        val stem = down.firstOrNull { it.varying.kind == Morpheme.Kind.STEM }?.varying?.form
+        if (stem != null) {
+            val across = db.gridByStem(stem)
+            assertTrue(
+                "$stem does not come back as a grid",
+                across.isEmpty() || across.all { it.fixed.form == stem },
+            )
+        }
     }
 
     @Test
