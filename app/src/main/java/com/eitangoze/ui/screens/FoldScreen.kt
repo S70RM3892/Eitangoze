@@ -2,6 +2,7 @@ package com.eitangoze.ui.screens
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -36,6 +38,9 @@ import androidx.compose.ui.unit.sp
 import com.eitangoze.data.Fold
 import com.eitangoze.data.ParsedSentence
 import com.eitangoze.data.Repository
+import com.eitangoze.data.SyntaxQuestion
+import com.eitangoze.data.SyntaxQuiz
+import com.eitangoze.ui.theme.Marks
 import com.eitangoze.ui.AppViewModel
 
 const val FOLD_SENTENCE_TAG = "fold-sentence"
@@ -64,6 +69,8 @@ fun FoldScreen(
     onSkeleton: () -> Unit,
     onUnfold: () -> Unit,
     onClose: () -> Unit,
+    answers: Map<Int, Int> = emptyMap(),
+    onAnswer: (Int, Int) -> Unit = { _, _ -> },
 ) {
     val colors = MaterialTheme.colorScheme
     val passage = reading.passage.text
@@ -103,6 +110,16 @@ fun FoldScreen(
                 Divider()
                 Spacer(Modifier.height(12.dp))
                 Skeleton(passage, sentence, colors.primary)
+            }
+
+            val questions = remember(sentence) {
+                SyntaxQuiz.of(sentence, passage, seed = sentence.ord)
+            }
+            if (questions.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                Divider()
+                Spacer(Modifier.height(12.dp))
+                Quiz(questions, sentence, passage, answers, onAnswer)
             }
 
             Spacer(Modifier.height(20.dp))
@@ -238,6 +255,78 @@ private fun FoldableSentence(
             },
         )
     }
+}
+
+/**
+ * Confirm the structure before translating anything.
+ *
+ * No translation is asked for and none is marked: several English sentences
+ * render the same Japanese and the reverse holds too, so a string comparison
+ * would fail most correct answers. What can be settled is where the marks are
+ * actually lost — which verb the sentence belongs to, whose it is, and what the
+ * relative clause hangs on — and every answer here comes from the tree rather
+ * than from an opinion.
+ */
+@Composable
+private fun Quiz(
+    questions: List<SyntaxQuestion>,
+    sentence: ParsedSentence,
+    passage: String,
+    answers: Map<Int, Int>,
+    onAnswer: (Int, Int) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Text("訳す前に、構文を確定する", style = MaterialTheme.typography.labelLarge,
+        color = colors.onSurfaceVariant)
+    questions.forEachIndexed { index, question ->
+        Spacer(Modifier.height(12.dp))
+        Text(question.prompt, style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.height(6.dp))
+        val chosen = answers[index]
+        question.choices.forEachIndexed { slot, token ->
+            val range = sentence.tokens.getOrNull(token)
+            val label = if (range == null) "?" else
+                passage.substring(range.first, range.last + 1)
+            val right = slot == question.correct
+            val background = when {
+                chosen == null -> Color.Transparent
+                right -> Marks.correct.copy(alpha = 0.14f)
+                slot == chosen -> Marks.wrong.copy(alpha = 0.14f)
+                else -> Color.Transparent
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(background)
+                    .border(
+                        1.dp,
+                        if (chosen == null) colors.outlineVariant else Color.Transparent,
+                        RoundedCornerShape(8.dp),
+                    )
+                    .clickable(enabled = chosen == null) { onAnswer(index, slot) }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+        if (chosen != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                (if (chosen == question.correct) "✓ " else "✗ ") + question.note,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (chosen == question.correct) Marks.correct else colors.onSurfaceVariant,
+            )
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "和訳そのものは採点しません。同じ日本語に正しい英文は何通りもあり、" +
+            "文字列比較では正解の大半を不正解にしてしまうからです。",
+        style = MaterialTheme.typography.labelSmall,
+        color = colors.onSurfaceVariant,
+    )
 }
 
 /** S / V / O under the words that carry them, once anything has been folded. */

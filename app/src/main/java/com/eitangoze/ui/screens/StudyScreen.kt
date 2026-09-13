@@ -387,6 +387,8 @@ private fun AnswerSheet(model: AppViewModel, card: StudyCard, onOpenEntry: (Long
                 }
             }
 
+            AnsweredShare(card)
+
             Spacer(Modifier.height(8.dp))
             card.answerNotes.forEach { (label, value) -> LabelValue(label, value) }
 
@@ -412,6 +414,77 @@ private fun AnswerSheet(model: AppViewModel, card: StudyCard, onOpenEntry: (Long
             TextButton(onClick = { onOpenEntry(card.entry.id) }) { Text("この語の詳細を見る") }
         }
     }
+}
+
+/**
+ * The proportions of this word's meanings, opened at the moment of answering.
+ *
+ * Answering is when the word is most alive, and it is the only moment at which
+ * "and here is the other meaning" is a discovery rather than a footnote. A
+ * dictionary lists senses; it never says that the one you just answered is the
+ * 22% one and that the 62% one is still coming — which, for 下線部和訳, is the
+ * part that decides the mark.
+ *
+ * The counts are from SemCor, a corpus a person hand-tagged sense by sense, so
+ * the bars are measurements and not an editor's ordering. They are only drawn
+ * for a word that has more than one counted meaning, because a single full bar
+ * would say nothing while looking as though it said something.
+ */
+@Composable
+private fun AnsweredShare(card: StudyCard) {
+    val senses = card.senseShare
+    if (senses.size < 2) return
+    val total = senses.sumOf { it.semcor }.toFloat()
+    if (total <= 0f) return
+    val colors = MaterialTheme.colorScheme
+    val answered = card.sense?.id
+
+    Spacer(Modifier.height(14.dp))
+    Text(
+        "意味の使われ方",
+        style = MaterialTheme.typography.labelLarge,
+        color = colors.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(6.dp))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(12.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(colors.surfaceVariant),
+    ) {
+        senses.forEach { sense ->
+            Box(
+                Modifier
+                    .weight(sense.semcor / total)
+                    .fillMaxHeight()
+                    .background(
+                        // The meaning just answered is the solid one; the rest
+                        // are there to show what is still unclaimed.
+                        if (sense.id == answered) colors.primary
+                        else colors.primary.copy(alpha = 0.22f),
+                    ),
+            )
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    senses.take(4).forEach { sense ->
+        val percent = (sense.semcor / total * 100).toInt()
+        val mine = sense.id == answered
+        Text(
+            (if (mine) "▸ " else "  ") + "$percent%  ${sense.jaLine}" +
+                if (mine) "  ← いま答えた意味" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (mine) colors.primary else colors.onSurfaceVariant,
+            fontWeight = if (mine) FontWeight.Medium else FontWeight.Normal,
+        )
+    }
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "語義タグ付きコーパス（SemCor）での出現比率",
+        style = MaterialTheme.typography.labelSmall,
+        color = colors.onSurfaceVariant,
+    )
 }
 
 @Composable

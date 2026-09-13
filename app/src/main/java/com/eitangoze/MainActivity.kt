@@ -195,6 +195,8 @@ private fun App(
                         onSkeleton = model::foldToSkeleton,
                         onUnfold = model::unfoldAll,
                         onClose = model::closeSentence,
+                        answers = model.syntaxAnswers,
+                        onAnswer = model::answerSyntax,
                     )
 
                     else -> Column(Modifier.fillMaxSize()) {

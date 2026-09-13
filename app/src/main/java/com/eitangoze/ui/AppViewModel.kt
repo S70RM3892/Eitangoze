@@ -388,14 +388,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         readingStartedAt = 0L
     }
 
+    /** Answers given to the structure questions on the open sentence. */
+    var syntaxAnswers by mutableStateOf<Map<Int, Int>>(emptyMap())
+        private set
+
     fun studySentence(ord: Int) {
         studiedSentence = ord
         collapsed = emptyList()
+        syntaxAnswers = emptyMap()
+    }
+
+    fun answerSyntax(question: Int, choice: Int) {
+        if (question in syntaxAnswers) return
+        syntaxAnswers = syntaxAnswers + (question to choice)
     }
 
     fun closeSentence() {
         studiedSentence = -1
         collapsed = emptyList()
+        syntaxAnswers = emptyMap()
     }
 
     /**

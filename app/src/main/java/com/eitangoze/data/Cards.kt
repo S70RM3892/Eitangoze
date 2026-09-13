@@ -35,6 +35,11 @@ data class StudyCard(
     val answerNotes: List<Pair<String, String>> = emptyList(),
     val examples: List<Example> = emptyList(),
     val checklist: List<String> = emptyList(),
+    /**
+     * Every meaning of this word with a corpus count, for the bar that opens
+     * when the answer is revealed. Empty when the word has only one.
+     */
+    val senseShare: List<Sense> = emptyList(),
 ) {
     val correctChoice: String get() = choices.getOrElse(correctIndex) { "" }
 }
@@ -107,6 +112,9 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         val senses = content.senses(entry.id)
         val withJa = senses.filter { it.ja.isNotEmpty() }
         val sense = senses.firstOrNull { card.senseId in it.sourceIds } ?: withJa.firstOrNull()
+        // Attached to every kind in one place: the proportions belong to the
+        // word, not to the question that happened to be asked about it.
+        val share = withJa.filter { it.semcor > 0 }.takeIf { it.size >= 2 }.orEmpty()
         return when (card.kind) {
             CardKind.MEANING -> meaning(card, entry, withJa)
             CardKind.CONTEXT -> context(card, entry, withJa)
@@ -116,7 +124,7 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
             CardKind.PARTICLE -> particle(card, entry, sense ?: return null)
             CardKind.ROOT_WORD -> root(card, entry, sense ?: return null)
             CardKind.COMPOSITION -> composition(card, entry)
-        }
+        }?.copy(senseShare = share)
     }
 
     // ---- individual kinds ---------------------------------------------------
