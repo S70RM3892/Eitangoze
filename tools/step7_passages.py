@@ -58,6 +58,9 @@ MAX_WORDS = 1100
 # Simple English articles are written short on purpose; holding them to the
 # length of an exam passage leaves one article in the whole encyclopaedia.
 PLAIN_MIN_WORDS = 220
+# A news report is short by the conventions of the form, not by accident. Held
+# to an exam passage's length, the whole of Wikinews yielded five.
+NEWS_MIN_WORDS = 250
 
 # Wikipedia is an encyclopaedia, so its articles arrive with apparatus that is
 # not prose and must not be counted as reading.
@@ -515,7 +518,8 @@ def collect(genre_id, label, kind, seeds, budget, seen=()):
         elif kind == "wikinews":
             site = "en.wikinews.org"
             got = wiki_passages(site, category_titles(site, seed)[:want * 4],
-                                genre_id, "CC BY 2.5")[:want]
+                                genre_id, "CC BY 2.5",
+                                minimum=NEWS_MIN_WORDS)[:want]
         elif kind == "gutenberg":
             got = gutenberg_passages(seed, genre_id, limit=max(8, want // 3))[:want]
         elif kind == "pmc":
