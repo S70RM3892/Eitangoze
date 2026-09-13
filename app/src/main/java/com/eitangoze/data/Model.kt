@@ -97,9 +97,21 @@ data class Sense(
     val antonyms: List<String>,
     val semcor: Int,
     val synset: String,
+    /**
+     * The `sense` rows this meaning was built from, when more than one was
+     * folded together; empty when the sense stands alone. See
+     * [com.eitangoze.data.ContentDb.senses] for why rows are folded at all.
+     */
+    val ids: List<Long> = emptyList(),
 ) {
     val headJa: String get() = ja.firstOrNull().orEmpty()
     val jaLine: String get() = ja.joinToString("、")
+
+    /** Every row behind this meaning, whether or not it was merged. */
+    val sourceIds: List<Long> get() = ids.ifEmpty { listOf(id) }
+
+    /** True when [other] would read as the same answer to a Japanese learner. */
+    fun sharesGloss(other: Sense): Boolean = ja.any { it in other.ja }
 }
 
 data class Example(val en: String, val ja: String)

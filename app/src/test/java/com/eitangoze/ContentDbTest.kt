@@ -173,6 +173,62 @@ class ContentDbTest {
         assertTrue("no context cards could be built", built > 10)
     }
 
+    /**
+     * The fold that makes the context card answerable at all.
+     *
+     * WordNet splits `make` into senses that the Japanese renders 為す twice
+     * over; shown as options they are one answer printed on two buttons. No two
+     * meanings of a word may share a gloss once [ContentDb.senses] has spoken.
+     */
+    @Test
+    fun `no two meanings of a word share a Japanese gloss`() {
+        var checked = 0
+        for (deckId in listOf("A1", "A2", "B1", "B2", "C1")) {
+            db.deckEntries(Deck.byId(deckId)!!, emptySet(), 200).forEach { entry ->
+                val senses = db.senses(entry.id).filter { it.ja.isNotEmpty() }
+                for (i in senses.indices) {
+                    for (j in i + 1 until senses.size) {
+                        val shared = senses[i].ja.filter { it in senses[j].ja }
+                        assertTrue(
+                            "${entry.lemma}: meanings ${senses[i].jaLine} and " +
+                                "${senses[j].jaLine} both claim $shared",
+                            shared.isEmpty(),
+                        )
+                    }
+                }
+                checked++
+            }
+        }
+        assertTrue(checked > 500)
+    }
+
+    /** A folded meaning keeps the frequency and the examples of every row in it. */
+    @Test
+    fun `folding a meaning adds up its rows`() {
+        var folded = 0
+        for (deckId in listOf("A1", "A2", "B1")) {
+            db.deckEntries(Deck.byId(deckId)!!, emptySet(), 200).forEach { entry ->
+                db.senses(entry.id).filter { it.ids.size > 1 }.forEach { sense ->
+                    val parts = sense.ids.mapNotNull { db.sense(it) }
+                    assertEquals(sense.ids.size, parts.size)
+                    assertEquals(parts.sumOf { it.semcor }, sense.semcor)
+                    assertEquals(sense.ids.first(), sense.id)
+                    assertTrue(
+                        "${entry.lemma}: folded gloss list is too wide to read",
+                        sense.ja.size <= 5,
+                    )
+                    // Every row's examples are reachable through the fold.
+                    val all = db.senseExamples(sense).toSet()
+                    sense.ids.forEach { id ->
+                        assertTrue(db.senseExamples(id).all { it in all })
+                    }
+                    folded++
+                }
+            }
+        }
+        assertTrue("nothing was folded at all", folded > 50)
+    }
+
     @Test
     fun `a cloze hides the word and keeps the translation`() {
         val factory = CardFactory(db)

@@ -161,24 +161,109 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     private val senseColumns =
         "id, entry_id, ord, ja, ja_def, def_en, parent, tags, topics, syn, ant, semcor, synset"
 
+    /**
+     * The meanings of a word — one per *memory*, not one per WordNet row.
+     *
+     * WordNet splits senses far finer than a Japanese gloss can follow. Of the
+     * 3,743 words that carry sense frequencies, 1,572 (42%) have a first and a
+     * second meaning whose Japanese is the same word, and the damage shows up
+     * twice: the ratio bar on the word's page reads "為す 62% ／ 為す 32%", and
+     * the context card — which draws its wrong answers from the word's *own*
+     * other meanings — offers two options nobody can tell apart.
+     *
+     * So: **if two senses of a word share any Japanese gloss, they are one
+     * memory, and they are folded together.** Their frequencies add, their
+     * glosses and labels join, and the earliest row stands for the group, which
+     * keeps both the canonical order and the card keys already in the study
+     * database pointing somewhere real.
+     *
+     * The distinctions this app exists to teach are untouched by that rule,
+     * because genuinely different meanings get genuinely different Japanese:
+     * `spare` is 予備の ／ 惜しむ ／ 見逃す, with no word in common.
+     */
     fun senses(entryId: Long): List<Sense> {
         val out = ArrayList<Sense>()
         db.rawQuery(
             "SELECT $senseColumns FROM sense WHERE entry_id = ? ORDER BY ord",
             arrayOf(entryId.toString()),
         ).use { c -> while (c.moveToNext()) out.add(readSense(c)) }
-        return out
+        return foldSharedGlosses(out)
+    }
+
+    /** Senses of one word, grouped so that no two of them share a gloss. */
+    private fun foldSharedGlosses(senses: List<Sense>): List<Sense> {
+        if (senses.size < 2) return senses
+
+        // Union-find over "shares a Japanese gloss", keeping the lowest index as
+        // each group's root so the result stays in the database's sense order.
+        val parent = IntArray(senses.size) { it }
+        fun find(i: Int): Int {
+            var root = i
+            while (parent[root] != root) {
+                parent[root] = parent[parent[root]]
+                root = parent[root]
+            }
+            return root
+        }
+        val firstSeenAt = HashMap<String, Int>()
+        for (i in senses.indices) {
+            for (gloss in senses[i].ja) {
+                val seen = firstSeenAt[gloss]
+                if (seen == null) {
+                    firstSeenAt[gloss] = i
+                } else {
+                    val a = find(seen)
+                    val b = find(i)
+                    if (a != b) parent[maxOf(a, b)] = minOf(a, b)
+                }
+            }
+        }
+
+        val groups = LinkedHashMap<Int, MutableList<Sense>>()
+        for (i in senses.indices) groups.getOrPut(find(i)) { ArrayList() }.add(senses[i])
+        if (groups.size == senses.size) return senses
+
+        return groups.values.map { members ->
+            val head = members.first()
+            if (members.size == 1) {
+                head
+            } else {
+                head.copy(
+                    // Capped at the width a single row already uses: a merged
+                    // meaning has to stay readable as one answer on a button.
+                    ja = members.flatMap { it.ja }.distinct().take(MAX_GLOSSES),
+                    tags = members.flatMap { it.tags }.distinct(),
+                    topics = members.flatMap { it.topics }.distinct(),
+                    synonyms = members.flatMap { it.synonyms }.distinct(),
+                    antonyms = members.flatMap { it.antonyms }.distinct(),
+                    semcor = members.sumOf { it.semcor },
+                    ids = members.map { it.id },
+                )
+            }
+        }
     }
 
     fun sense(id: Long): Sense? =
         db.rawQuery("SELECT $senseColumns FROM sense WHERE id = ?", arrayOf(id.toString()))
             .use { if (it.moveToFirst()) readSense(it) else null }
 
-    fun senseExamples(senseId: Long): List<Example> {
+    fun senseExamples(senseId: Long): List<Example> = senseExamples(listOf(senseId))
+
+    /**
+     * Examples for a meaning, gathered from every row behind it.
+     *
+     * A folded sense would otherwise show only the examples of the row that
+     * happened to come first, discarding the rest for no reason.
+     */
+    fun senseExamples(sense: Sense): List<Example> = senseExamples(sense.sourceIds)
+
+    private fun senseExamples(senseIds: List<Long>): List<Example> {
+        if (senseIds.isEmpty()) return emptyList()
         val out = ArrayList<Example>()
+        val holes = senseIds.joinToString(",") { "?" }
         db.rawQuery(
-            "SELECT en, ja FROM sense_example WHERE sense_id = ?",
-            arrayOf(senseId.toString()),
+            "SELECT en, ja FROM sense_example WHERE sense_id IN ($holes)",
+            senseIds.map { it.toString() }.toTypedArray(),
         ).use { c -> while (c.moveToNext()) out.add(Example(c.getString(0), c.getString(1))) }
         return out
     }
@@ -381,6 +466,9 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     companion object {
         /** Bumped whenever a release ships a different content database. */
         const val VERSION = 1
+
+        /** How many Japanese glosses one meaning may show. */
+        private const val MAX_GLOSSES = 5
 
         // Deliberately not named `.gz`: the Android asset merger expands any
         // asset with that extension at build time, which would put 31 MB of

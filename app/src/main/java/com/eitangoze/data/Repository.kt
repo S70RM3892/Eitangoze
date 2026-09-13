@@ -266,7 +266,7 @@ class Repository(context: Context) {
         return EntryDetail(
             entry = entry,
             senses = senses,
-            examplesBySense = senses.associate { it.id to content.senseExamples(it.id) },
+            examplesBySense = senses.associate { it.id to content.senseExamples(it) },
             sentences = content.sentences(entryId, limit = 5),
             collocations = content.collocations(entryId),
             relations = content.relations(entryId),
