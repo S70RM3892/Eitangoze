@@ -135,8 +135,7 @@ class WritingTest {
     fun `the attempt is compared against whichever reference it came closest to`() {
         val multiple = repo.content.writingPool(limit = 400)
             .map { it.ja }.distinct().firstNotNullOfOrNull { ja ->
-            drill().task(ja, readiness = 1.0) { repo.analyze(it) }
-                ?.takeIf { it.references.size >= 2 }
+            drill().task(ja) { repo.analyze(it) }?.takeIf { it.references.size >= 2 }
         }
         // The corpus has plenty of these, but nothing guarantees one lands in a
         // random draw, so a miss skips rather than fails.

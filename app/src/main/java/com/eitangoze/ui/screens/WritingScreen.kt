@@ -85,9 +85,9 @@ private fun Loading() {
 }
 
 /**
- * There is nothing to ask yet, and saying why is the useful part: the drill is
- * seeded from words already studied, so an empty first run is the app working,
- * not failing.
+ * There is nothing to ask yet, and saying why is the useful part: the drill
+ * refuses to set a sentence whose words the learner has not met, so an empty
+ * first run is the app working rather than failing.
  */
 @Composable
 private fun NothingToWrite(model: AppViewModel) {
@@ -115,10 +115,10 @@ private fun Task(model: AppViewModel, task: WritingTask, onOpenEntry: (Long) -> 
     Spacer(Modifier.height(8.dp))
     Text(
         if (task.clean) {
-            "この文の英語は、あなたが読める語だけでできています。" +
+            "この文には、あなたが読める語だけでできた英訳があります。" +
                 "書けなかった語があれば、それは「読めるのに書けない語」です。"
         } else {
-            "この文の内容語のうち、あなたが読めるのは " +
+            "一番近い英訳でも、内容語のうちあなたが読めるのは " +
                 "${(task.readiness * 100).toInt()}% です。残りは未学習の語です。"
         },
         style = MaterialTheme.typography.bodySmall,

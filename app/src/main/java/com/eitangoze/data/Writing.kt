@@ -67,10 +67,12 @@ data class Reference(
 /**
  * A Japanese sentence to write in English.
  *
- * [readiness] is the share of the reference translation's content words the
- * learner is predicted to know by sight. It is shown rather than hidden: at 1.0
- * the drill is a clean test of production, and below it the learner is entitled
- * to know that part of what they are being asked for is simply new vocabulary.
+ * [readiness] is the share of content words the learner is predicted to know by
+ * sight, in whichever of the [references] they know best — one translation they
+ * could have written is all the drill needs. It is shown rather than hidden: at
+ * 1.0 the drill is a clean test of production, and below it the learner is
+ * entitled to know that part of what is being asked of them is simply new
+ * vocabulary.
  */
 data class WritingTask(
     val ja: String,
@@ -186,16 +188,28 @@ class WritingDrill(private val content: ContentDb) {
         }
         val chosen = best ?: return null
         if (bestScore < floor) return null
-        return task(chosen.ja, readiness = bestScore, analyze = analyze)
+        return task(chosen.ja, analyze)
     }
 
-    /** Build the task for one Japanese sentence, gathering every English for it. */
-    fun task(ja: String, readiness: Double, analyze: (String) -> TextReport): WritingTask? {
+    /**
+     * Build the task for one Japanese sentence, gathering every English for it.
+     *
+     * Readiness is measured again here, over each translation in turn, and the
+     * best one wins: the learner only has to have written one of them, so a
+     * second translation full of words they have never met says nothing about
+     * whether this sentence is fair to ask for.
+     */
+    fun task(ja: String, analyze: (String) -> TextReport): WritingTask? {
         val parallels = content.parallels(ja)
         if (parallels.isEmpty()) return null
+        var readiness = 0.0
         val references = parallels.entries
             .distinctBy { it.value.trim() }
-            .map { (id, en) -> Reference(id, en, contentWords(analyze(en))) }
+            .map { (id, en) ->
+                val report = analyze(en)
+                readiness = maxOf(readiness, readiness(report))
+                Reference(id, en, contentWords(report))
+            }
             .filter { it.content.isNotEmpty() }
         if (references.isEmpty()) return null
         return WritingTask(ja = ja, references = references, readiness = readiness)
