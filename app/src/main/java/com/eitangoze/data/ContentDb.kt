@@ -678,8 +678,14 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     fun close() = db.close()
 
     companion object {
-        /** Bumped whenever a release ships a different content database. */
-        const val VERSION = 1
+        /**
+         * Bumped whenever a release ships a different content database.
+         *
+         * 2: the Japanese of each meaning is ordered by how common the word is
+         * rather than by whether JMdict calls it common at all, which had
+         * `child` arriving as 「キッド」 and `money` as 「ゲル」.
+         */
+        const val VERSION = 2
 
         /** How many Japanese glosses one meaning may show. */
         private const val MAX_GLOSSES = 5

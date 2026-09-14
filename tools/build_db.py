@@ -52,36 +52,48 @@ WORD_CHARS = re.compile(r"[A-Za-z]")
 JA_SUFFIXES = ("する", "した", "している", "な", "に", "の", "たる", "と")
 
 
+#: A Japanese word JMdict does not rank. See step6_japanese_common.py.
+UNRANKED_JA = 100
+
+
 def load_common_japanese():
-    """Everyday Japanese, used to order glosses. Empty if the step was skipped."""
-    path = os.path.join(CACHE, "ja_common.json")
+    """How common each Japanese word is. Empty if the step was skipped."""
+    path = os.path.join(CACHE, "ja_rank.json")
     if not os.path.exists(path):
-        return set()
+        return {}
     with open(path, encoding="utf-8") as f:
-        return set(json.load(f))
+        return json.load(f)
 
 
-def is_common_japanese(word, common):
-    if word in common:
-        return True
+def japanese_rank(word, common):
+    rank = common.get(word)
+    if rank is not None:
+        return rank
     # JMdict lists 延期 rather than 延期する, so a verbal or adjectival ending is
     # stripped before asking.
     for suffix in JA_SUFFIXES:
-        if word.endswith(suffix) and word[:-len(suffix)] in common:
-            return True
-    return False
+        if word.endswith(suffix):
+            rank = common.get(word[:-len(suffix)])
+            if rank is not None:
+                return rank
+    return UNRANKED_JA
 
 
 def order_japanese(words, common):
-    """Everyday words first, original order kept within each group.
+    """Commonest Japanese first, original order kept within each rank.
 
     The Japanese WordNet lists a synset's lemmas in no useful order, so 待つ can
     come out behind 待ちのぞむ. This is the only thing the ordering fixes: no
     word is added, dropped or rewritten.
+
+    Ordering by a yes/no "is this an everyday word" was not enough, and it is
+    what shipped: JMdict counts common loanwords as everyday, so ピープル tied
+    with 人々, キッド with 子供, ゲル with お金 — and ties keep the arbitrary
+    order they arrived in. The learner was taught 「キッド」 for `child`.
     """
     if not common:
         return words
-    return sorted(words, key=lambda w: 0 if is_common_japanese(w, common) else 1)
+    return sorted(words, key=lambda w: japanese_rank(w, common))
 
 
 def load_cache():

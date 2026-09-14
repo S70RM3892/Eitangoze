@@ -18,7 +18,7 @@
 | B2 超の語の頻度順位 | [wikipedia-word-frequency](https://github.com/IlyaSemenov/wikipedia-word-frequency)（English Wikipedia 2023-04-13） | MIT |
 | 語の分解（接頭辞・語根・接尾辞）、接辞の英語定義 | [English Wiktionary](https://en.wiktionary.org/) の語源テンプレート（prefix / suffix / affix / confix）と接辞の項目 | CC BY-SA 4.0 / GFDL |
 | 接辞の日本語訳 | `tools/affix_ja.json`（本リポジトリで書き下ろし） | このリポジトリのライセンスに従う |
-| 日本語訳の並び順（常用語を先頭に） | [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html)（電子辞書研究開発グループ）の優先度タグ | CC BY-SA 4.0 |
+| 日本語訳の並び順（頻度の高い語を先頭に） | [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html)（電子辞書研究開発グループ）の優先度タグと頻度帯 nf01–nf48 | CC BY-SA 4.0 |
 
 ## 引用の表記
 
@@ -74,4 +74,4 @@ Wiktionary の接辞ページは翻訳表をほとんど持たず、機械的に
   日本語としては正しくても見出し語の訳としては使えないものが出ます。そのぶん
   `bravely` `coastal` のような派生語が約 400 語落ちますが、訳がないよりも
   **誤った訳が入るほうが害が大きい**と判断しました。
-  JMdict は「どの日本語が常用語か」の判定にだけ使っています（訳語の並べ替え）。
+  JMdict は「その日本語がどれくらい使われるか」の判定にだけ使っています（訳語の並べ替え）。

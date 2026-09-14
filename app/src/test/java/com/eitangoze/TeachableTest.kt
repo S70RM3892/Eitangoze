@@ -131,6 +131,27 @@ class TeachableTest {
         }
     }
 
+    /**
+     * The first Japanese on a card is what the learner takes the word to mean,
+     * and it was a transliteration for 1,410 entries: `child` 「キッド」,
+     * `money` 「ゲル」, `people` 「ピープル」. The glosses themselves were fine;
+     * the order was not, because the ordering asked whether JMdict calls a word
+     * common and JMdict counts common loanwords as common.
+     */
+    @Test
+    fun `the first meaning shown is the commonest Japanese, not a transliteration`() {
+        fun head(lemma: String) =
+            repo.search(lemma).first { it.lemma == lemma }.ja.first()
+
+        assertEquals("子", head("child"))
+        assertEquals("お金", head("money"))
+        assertEquals("人々", head("people"))
+        assertEquals("仕事", head("work"))
+        // A loanword that really is the ordinary Japanese keeps its place: both
+        // of these carry JMdict's everyday tag, and 乗合自動車 carries nothing.
+        assertEquals("テレビ", head("television"))
+    }
+
     /** Nothing was deleted: the dictionary still knows what it knew. */
     @Test
     fun `the dictionary still answers for the words the decks skip`() {
