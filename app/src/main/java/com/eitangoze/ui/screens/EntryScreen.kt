@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -153,6 +154,16 @@ fun EntryScreen(
         }
 
         val related = detail.relations.filter { it.kind.code != "root" }
+        if (related.isNotEmpty() || detail.family != null) {
+            Spacer(Modifier.height(8.dp))
+            // The same connections the list below carries, drawn as a map and
+            // coloured by what this learner can read. The list says what else
+            // exists; the map says where they are in it.
+            OutlinedButton(
+                onClick = { model.openMap(detail.entry.id) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("つながりの地図で見る") }
+        }
         if (related.isNotEmpty()) {
             Section("関連") {
                 Column {

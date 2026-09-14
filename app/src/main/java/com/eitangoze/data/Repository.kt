@@ -21,6 +21,7 @@ class Repository(context: Context, private val random: Random = Random.Default) 
     private val analyzer = TextAnalyzer(content)
     private val drill = WritingDrill(content)
     private val essays = EssayReader(content)
+    private val mapper = WordMapper(content)
 
     // ---- settings -----------------------------------------------------------
 
@@ -651,6 +652,21 @@ class Repository(context: Context, private val random: Random = Random.Default) 
         val level = LEVELS.indexOf(entry.cefr)
         return level in 0..baseline
     }
+
+    // ---- the map ------------------------------------------------------------
+
+    /**
+     * The words around one word, coloured by what this learner can read.
+     *
+     * Uses the same memory model as the reading screens, deliberately: a word
+     * counts as known when a *recognition* card for it is predicted to be
+     * recallable, which is what "you would know this if you met it" means.
+     */
+    fun wordMap(entryId: Long, now: Long = System.currentTimeMillis()): WordMap? =
+        mapper.map(entryId) { entries ->
+            val cards = user.cardsOfEntries(entries.map { it.id })
+            entries.associate { it.id to memoryOf(it, cards[it.id].orEmpty(), now) }
+        }
 
     // ---- writing English ----------------------------------------------------
 

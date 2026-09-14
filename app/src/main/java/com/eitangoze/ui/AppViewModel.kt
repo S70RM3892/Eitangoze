@@ -20,6 +20,7 @@ import com.eitangoze.data.GradeResult
 import com.eitangoze.data.Repository
 import com.eitangoze.data.StudyCard
 import com.eitangoze.data.TextReport
+import com.eitangoze.data.WordMap
 import com.eitangoze.data.WritingReview
 import com.eitangoze.data.WritingTask
 import com.eitangoze.data.gradeEnglish
@@ -501,6 +502,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val added = withContext(Dispatchers.IO) { repo.pick(ordered, source = "text") }
             readerMessage = "$added 語を「自分の英文・単語帳から」に追加しました"
             selectedGaps = emptySet()
+            refresh()
+        }
+    }
+
+    // ---- the map ------------------------------------------------------------
+
+    /** The word whose neighbourhood is on screen, or null while it loads. */
+    var wordMap by mutableStateOf<WordMap?>(null)
+        private set
+
+    var mapMessage by mutableStateOf<String?>(null)
+        private set
+
+    /** The word the map is centred on, or 0 when the map is closed. */
+    var mapCenter by mutableStateOf(0L)
+        private set
+
+    val mapOpen: Boolean get() = mapCenter != 0L
+
+    /** Open the map on a word, or walk it to a neighbour. */
+    fun openMap(entryId: Long) {
+        val repo = repo ?: return
+        mapMessage = null
+        mapCenter = entryId
+        // The entry sheet draws over everything; opening the map from it has to
+        // put the sheet away or nothing appears to happen.
+        detail = null
+        viewModelScope.launch {
+            val drawn = withContext(Dispatchers.IO) { repo.wordMap(entryId) }
+            // A tap that landed while another was loading must not redraw the
+            // screen with the word the learner has already walked away from.
+            if (mapCenter == entryId) wordMap = drawn
+        }
+    }
+
+    fun closeMap() {
+        wordMap = null
+        mapCenter = 0L
+        mapMessage = null
+    }
+
+    /** Take the words on the map that are not known yet into the study list. */
+    fun takeMapGaps() {
+        val repo = repo ?: return
+        val map = wordMap ?: return
+        val ids = map.nodes.filterNot { it.known }.map { it.entry.id }
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val added = withContext(Dispatchers.IO) { repo.pick(ids, source = "map") }
+            mapMessage = "$added 語を「自分の英文・単語帳から」に追加しました"
+            openMap(map.center.id)
             refresh()
         }
     }

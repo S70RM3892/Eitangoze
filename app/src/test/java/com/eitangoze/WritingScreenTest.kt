@@ -13,9 +13,12 @@ import com.eitangoze.data.EssayPart
 import com.eitangoze.ui.AppViewModel
 import com.eitangoze.ui.screens.ESSAY_TAG
 import com.eitangoze.ui.screens.EssayScreen
+import com.eitangoze.ui.screens.MAP_TAG
+import com.eitangoze.ui.screens.MapScreen
 import com.eitangoze.ui.screens.WRITING_TAG
 import com.eitangoze.ui.screens.WritingScreen
 import com.eitangoze.ui.theme.EitangozeTheme
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -96,6 +99,40 @@ class WritingScreenTest {
             compose.onAllNodesWithText("参照訳の内容語と重なった数です。点数ではありません。")
                 .fetchSemanticsNodes().isNotEmpty(),
         )
+    }
+
+    /**
+     * The map is the one screen in the app that draws rather than lays out, so
+     * a unit test cannot see it at all: the words are painted into a canvas.
+     * What this checks is that it composes, that the word in the middle is the
+     * one asked for, and that walking to a neighbour re-centres it — the whole
+     * point of drawing it instead of listing it.
+     */
+    @Test
+    fun `the map draws a word and walks to its neighbours`() {
+        val model = model()
+        val repo = model.repository!!
+        val reduce = repo.search("reduce").first { it.lemma == "reduce" }
+
+        model.openMap(reduce.id)
+        waitFor("the map") { model.wordMap != null }
+        compose.setContent {
+            EitangozeTheme(dark = false) { MapScreen(model, onOpenEntry = {}) }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag(MAP_TAG).assertExists()
+
+        val map = model.wordMap!!
+        assertTrue("reduce has neighbours in the dictionary", map.nodes.isNotEmpty())
+        // The list under the picture names every neighbour, so the map is
+        // readable without being able to hit a circle.
+        val neighbour = map.nodes.first()
+        compose.onNodeWithText(neighbour.entry.lemma, substring = true).assertExists()
+
+        model.openMap(neighbour.entry.id)
+        waitFor("the map to walk") { model.wordMap?.center?.id == neighbour.entry.id }
+        compose.waitForIdle()
+        assertEquals(neighbour.entry.lemma, model.wordMap!!.center.lemma)
     }
 
     @Test

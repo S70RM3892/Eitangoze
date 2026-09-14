@@ -36,6 +36,7 @@ import com.eitangoze.ui.screens.EssayScreen
 import com.eitangoze.ui.screens.FoldScreen
 import com.eitangoze.ui.screens.GridScreen
 import com.eitangoze.ui.screens.LibraryScreen
+import com.eitangoze.ui.screens.MapScreen
 import com.eitangoze.ui.screens.PassageScreen
 import com.eitangoze.ui.screens.ReadingBar
 import com.eitangoze.ui.screens.ReadingResultScreen
@@ -96,6 +97,7 @@ private fun App(
 ) {
     var screen by remember { mutableStateOf(Screen.HOME) }
     val detail = model.detail
+    val wordMap = model.wordMap
     val grid = model.grid
     val reading = model.reading
     val sentence = model.currentSentence()
@@ -133,13 +135,15 @@ private fun App(
         return
     }
 
-    val showBack = screen != Screen.HOME || detail != null || grid != null || reading != null
+    val showBack = screen != Screen.HOME || detail != null || grid != null ||
+        reading != null || model.mapOpen
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         detail?.entry?.lemma
+                            ?: wordMap?.center?.lemma?.let { "$it のつながり" }
                             ?: grid?.held
                             ?: reading?.passage?.title?.take(28)
                             ?: screen.title,
@@ -150,6 +154,7 @@ private fun App(
                         IconButton(onClick = {
                             when {
                                 detail != null -> model.closeEntry()
+                                model.mapOpen -> model.closeMap()
                                 grid != null -> model.closeGrid()
                                 sentence != null -> model.closeSentence()
                                 reading != null -> model.closeReading()
@@ -216,6 +221,10 @@ private fun App(
                         )
                     }
                 }
+                return@Box
+            }
+            if (model.mapOpen) {
+                MapScreen(model, onOpenEntry = model::openEntry)
                 return@Box
             }
             if (grid != null) {
