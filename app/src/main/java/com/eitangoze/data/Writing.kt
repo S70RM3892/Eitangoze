@@ -221,17 +221,32 @@ class WritingDrill(private val content: ContentDb) {
      * The reference it comes closest to is the one reported against. Any of them
      * is a right answer, so scoring against a fixed one — the first, the
      * shortest — would fail a learner for choosing the other translator's words.
+     *
+     * Content words alone do not always pick one out. Two translations of the
+     * same Japanese are often the same sentence twice — `…password, please?` and
+     * `…password?`, `theatre` and `theater` — and then every content word
+     * matches both. The overlap reported would be identical either way, but the
+     * screen prints the winner in bold and says it is the one closest to what
+     * you wrote, so it has to actually be that one: ties fall through to the
+     * words as typed, and then to writing a reference back exactly.
      */
     fun review(task: WritingTask, written: String, analyze: (String) -> TextReport): WritingReview {
         val report = if (written.isBlank()) TextReport.EMPTY else analyze(written)
         val mine = contentWords(report)
         val mineIds = mine.map { it.id }.toSet()
+        val typed = WORD.findAll(written.lowercase()).map { it.value }.toSet()
+        val plain = plain(written)
 
         val closest = task.references.maxWithOrNull(
             compareBy<Reference> { reference ->
                 if (reference.content.isEmpty()) 0.0
                 else reference.content.count { it.id in mineIds }.toDouble() / reference.content.size
-            }.thenBy { it.content.count { word -> word.id in mineIds } }
+            }
+                .thenBy { it.content.count { word -> word.id in mineIds } }
+                .thenBy { reference ->
+                    WORD.findAll(reference.en.lowercase()).count { it.value in typed }
+                }
+                .thenBy { if (plain.isNotEmpty() && plain(it.en) == plain) 1 else 0 }
         ) ?: task.shortest
 
         val matched = closest.content.filter { it.id in mineIds }
@@ -276,6 +291,10 @@ class WritingDrill(private val content: ContentDb) {
         } ?: return null
         return Substitution(expected = expected, used = relation.other, kind = relation.kind)
     }
+
+    /** Letters and spacing only, for asking whether two sentences are the same one. */
+    private fun plain(text: String): String =
+        WORD.findAll(text.lowercase()).joinToString(" ") { it.value }
 
     /** Everything in a text but the grammar words, deduplicated, in order. */
     private fun contentWords(report: TextReport): List<Entry> =

@@ -130,24 +130,34 @@ class WritingTest {
      * Tatoeba pairs some Japanese with several English sentences, and all of
      * them are right. Marking against a fixed one would fail a learner for
      * having written the other translator's words.
+     *
+     * The hard case is two translations that are the same sentence twice —
+     * `…password, please?` and `…password?`, `theatre` and `theater`. Every
+     * content word matches both, so nothing in the overlap picks one, and the
+     * screen still prints one of them in bold as the closest to what you wrote.
+     * Roughly two in five multi-translation items are that shape, which is why
+     * this test walks several of them rather than the first one it finds.
      */
     @Test
     fun `the attempt is compared against whichever reference it came closest to`() {
-        val multiple = repo.content.writingPool(limit = 400)
-            .map { it.ja }.distinct().firstNotNullOfOrNull { ja ->
-            drill().task(ja) { repo.analyze(it) }?.takeIf { it.references.size >= 2 }
-        }
-        // The corpus has plenty of these, but nothing guarantees one lands in a
-        // random draw, so a miss skips rather than fails.
-        if (multiple == null) return
+        val tasks = repo.content.writingPool(limit = 400).map { it.ja }.distinct()
+            .asSequence()
+            .mapNotNull { ja -> drill().task(ja) { repo.analyze(it) } }
+            .filter { it.references.size >= 2 }
+            .take(5)
+            .toList()
+        assertTrue("no Japanese with two translations in a pool of 400", tasks.isNotEmpty())
 
-        multiple.references.forEach { reference ->
-            val review = repo.reviewWriting(multiple, reference.en)
-            assertEquals(
-                "writing reference ${reference.id} back was not matched against itself",
-                reference.id, review.closest.id,
-            )
-            assertTrue(review.missed.isEmpty())
+        tasks.forEach { task ->
+            task.references.forEach { reference ->
+                val review = repo.reviewWriting(task, reference.en)
+                assertEquals(
+                    "writing \"${reference.en}\" back was matched against " +
+                        "\"${review.closest.en}\" instead of itself",
+                    reference.id, review.closest.id,
+                )
+                assertTrue(review.missed.isEmpty())
+            }
         }
     }
 
