@@ -136,6 +136,9 @@ class PassageDb private constructor(private val db: SQLiteDatabase) {
         /** Bumped whenever a release ships a different passage library. */
         const val VERSION = 1
 
+        /** The longest a passage can be and still be one exam passage. */
+        private const val LONGEST = 1200
+
         /**
          * A passage worth handing to a reader of English.
          *
@@ -146,8 +149,13 @@ class PassageDb private constructor(private val db: SQLiteDatabase) {
          * and two biographies thick with names. They are not hard English, they
          * are not English, and putting one in front of a learner as "the passage
          * for you" would be the app failing loudly.
+         *
+         * Nine more are simply too long — up to 2,499 words, where the splitter
+         * ran past the end of a Gutenberg essay. 京大 sets 730 and 580; a
+         * passage of that length is the exercise, and one of 2,499 is three of
+         * them with a reading speed measured across the lot.
          */
-        private const val READABLE = "coverable >= 0.5"
+        private const val READABLE = "coverable >= 0.5 AND words <= $LONGEST"
 
         // Not `.gz`: the Android asset merger expands assets with that extension.
         private const val ASSET = "passages.dbz"

@@ -16,8 +16,8 @@ android {
         // release. It had been left at 1.0 through v2.0 and v2.1: harmless for
         // a sideloaded APK, fatal on Play Store, where every upload needs a
         // versionCode nobody has used before. 4 is the fourth release.
-        versionCode = 5
-        versionName = "2.3"
+        versionCode = 6
+        versionName = "2.4"
         vectorDrawables { useSupportLibrary = true }
     }
 
