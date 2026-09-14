@@ -12,8 +12,12 @@ android {
         applicationId = "com.eitangoze"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Bumped with .github/release.txt, which is what actually drives a
+        // release. It had been left at 1.0 through v2.0 and v2.1: harmless for
+        // a sideloaded APK, fatal on Play Store, where every upload needs a
+        // versionCode nobody has used before. 4 is the fourth release.
+        versionCode = 4
+        versionName = "2.2"
         vectorDrawables { useSupportLibrary = true }
     }
 
