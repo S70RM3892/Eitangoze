@@ -41,6 +41,8 @@ import kotlin.math.roundToInt
 fun HomeScreen(
     model: AppViewModel,
     onStudy: () -> Unit,
+    onWrite: () -> Unit,
+    onEssay: () -> Unit,
     onReader: () -> Unit,
     onLibrary: () -> Unit,
     onBrowse: () -> Unit,
@@ -80,6 +82,13 @@ fun HomeScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Spacer(Modifier.height(14.dp))
+                WritingInvite(onWrite)
+                Spacer(Modifier.height(6.dp))
+                OutlinedButton(onClick = onEssay, modifier = Modifier.fillMaxWidth()) {
+                    Text("自由英作文（80〜100語）")
+                }
+
                 Spacer(Modifier.height(14.dp))
                 ReaderInvite(onReader)
 
@@ -176,6 +185,40 @@ private fun ReaderInvite(onReader: () -> Unit) {
                 "98% に届くために足りない単語だけが出ます",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+    }
+}
+
+/**
+ * The other half of the exam.
+ *
+ * Reading and writing are separate memories here — the app schedules them as
+ * separate cards — so it is the one app that can pick a Japanese sentence whose
+ * English the learner is predicted to *read* and then show them which of those
+ * words they could not *write*. That gap is invisible from inside: you cannot
+ * notice a word you did not reach for.
+ */
+@Composable
+private fun WritingInvite(onWrite: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .clickable(onClick = onWrite)
+            .padding(14.dp),
+    ) {
+        Text(
+            "読める語と、書ける語は違う",
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "あなたが読める語だけでできた日本語文を英訳します。書けなかった語だけが" +
+                "残るので、それが和文英訳で落とす語です",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
     }
 }

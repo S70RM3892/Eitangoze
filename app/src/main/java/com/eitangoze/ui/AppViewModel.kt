@@ -10,6 +10,8 @@ import com.eitangoze.data.AnswerMode
 import com.eitangoze.data.CardKind
 import com.eitangoze.data.Deck
 import com.eitangoze.data.Entry
+import com.eitangoze.data.EssayCheck
+import com.eitangoze.data.EssayPart
 import com.eitangoze.data.Fold
 import com.eitangoze.data.Genre
 import com.eitangoze.data.ParsedSentence
@@ -18,6 +20,8 @@ import com.eitangoze.data.GradeResult
 import com.eitangoze.data.Repository
 import com.eitangoze.data.StudyCard
 import com.eitangoze.data.TextReport
+import com.eitangoze.data.WritingReview
+import com.eitangoze.data.WritingTask
 import com.eitangoze.data.gradeEnglish
 import com.eitangoze.srs.Rating
 import kotlinx.coroutines.Dispatchers
@@ -499,6 +503,117 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             selectedGaps = emptySet()
             refresh()
         }
+    }
+
+    // ---- writing English ----------------------------------------------------
+
+    /** The Japanese sentence being written, or null before one is asked for. */
+    var writingTask by mutableStateOf<WritingTask?>(null)
+        private set
+
+    var writingText by mutableStateOf("")
+        private set
+
+    var writingReview by mutableStateOf<WritingReview?>(null)
+        private set
+
+    var writingLoading by mutableStateOf(false)
+        private set
+
+    var writingMessage by mutableStateOf<String?>(null)
+        private set
+
+    /** True when the corpus had nothing this learner is ready to write yet. */
+    var writingEmpty by mutableStateOf(false)
+        private set
+
+    fun nextWriting() {
+        val repo = repo ?: return
+        if (writingLoading) return
+        writingLoading = true
+        writingText = ""
+        writingReview = null
+        writingMessage = null
+        viewModelScope.launch {
+            val task = withContext(Dispatchers.IO) { repo.writingTask() }
+            writingTask = task
+            writingEmpty = task == null
+            writingLoading = false
+        }
+    }
+
+    fun typeWriting(text: String) {
+        writingText = text
+    }
+
+    fun checkWriting() {
+        val repo = repo ?: return
+        val task = writingTask ?: return
+        if (writingText.isBlank()) return
+        viewModelScope.launch {
+            writingReview = withContext(Dispatchers.IO) { repo.reviewWriting(task, writingText) }
+        }
+    }
+
+    /** Put the words that were readable but not writable back in the queue. */
+    fun takeWritingGaps() {
+        val repo = repo ?: return
+        val review = writingReview ?: return
+        val ids = review.missed.map { it.id }
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val taken = withContext(Dispatchers.IO) { repo.takeWritingGaps(ids) }
+            writingMessage = "$taken 語の「和→英」を今日の学習に入れました"
+            refresh()
+        }
+    }
+
+    fun closeWriting() {
+        writingTask = null
+        writingText = ""
+        writingReview = null
+        writingMessage = null
+        writingEmpty = false
+    }
+
+    // ---- free composition ----------------------------------------------------
+
+    /** The four moves of the argument, kept apart so the shape is visible. */
+    var essayParts by mutableStateOf(EssayPart.entries.associateWith { "" })
+        private set
+
+    var essayCheck by mutableStateOf<EssayCheck?>(null)
+        private set
+
+    var essayChecking by mutableStateOf(false)
+        private set
+
+    /** The whole answer, in the order it will be read. */
+    val essayText: String
+        get() = EssayPart.entries
+            .mapNotNull { essayParts[it]?.trim()?.takeIf(String::isNotEmpty) }
+            .joinToString(" ")
+
+    fun typeEssay(part: EssayPart, text: String) {
+        essayParts = essayParts + (part to text)
+        // The measurement belongs to the text that produced it.
+        essayCheck = null
+    }
+
+    fun checkEssay() {
+        val repo = repo ?: return
+        val text = essayText
+        if (text.isBlank() || essayChecking) return
+        essayChecking = true
+        viewModelScope.launch {
+            essayCheck = withContext(Dispatchers.IO) { repo.checkEssay(text) }
+            essayChecking = false
+        }
+    }
+
+    fun clearEssay() {
+        essayParts = EssayPart.entries.associateWith { "" }
+        essayCheck = null
     }
 
     // ---- importing a word list ----------------------------------------------

@@ -19,6 +19,8 @@ class Repository(context: Context) {
     private val user = UserDb(context)
     private val factory = CardFactory(content)
     private val analyzer = TextAnalyzer(content)
+    private val drill = WritingDrill(content)
+    private val essays = EssayReader(content)
 
     // ---- settings -----------------------------------------------------------
 
@@ -615,6 +617,69 @@ class Repository(context: Context) {
         return level in 0..baseline
     }
 
+    // ---- writing English ----------------------------------------------------
+
+    /**
+     * A Japanese sentence this learner ought to be able to write.
+     *
+     * Chosen by running the same memory model the reading screens use over a
+     * random pool of corpus sentences and keeping the one whose English this
+     * learner can already read. That ordering matters: the drill is meant to
+     * measure production, and a sentence full of unmet words fails for a reason
+     * everyone already knows. Null means the pool held nothing they are ready
+     * for yet — see [WritingDrill.pick].
+     */
+    fun writingTask(now: Long = System.currentTimeMillis()): WritingTask? =
+        drill.pick(content.writingPool()) { analyze(it, now) }
+
+    fun reviewWriting(
+        task: WritingTask,
+        written: String,
+        now: Long = System.currentTimeMillis(),
+    ): WritingReview = drill.review(task, written) { analyze(it, now) }
+
+    fun checkEssay(text: String, now: Long = System.currentTimeMillis()): EssayCheck =
+        essays.check(text) { analyze(it, now) }
+
+    /**
+     * Put the words you could read but not write back in front of you.
+     *
+     * The production card is the one that failed, so the production card is the
+     * one that comes back — not the word in general. A word with no production
+     * card yet gets one immediately rather than joining the queue for new
+     * material, because it has already been asked for once today and answered
+     * wrongly; waiting three days to ask it properly would be a strange way to
+     * treat the freshest evidence in the database.
+     *
+     * The memory model is deliberately left alone: see [UserDb.bringForward].
+     */
+    fun takeWritingGaps(entryIds: List<Long>, now: Long = System.currentTimeMillis()): Int {
+        if (entryIds.isEmpty()) return 0
+        val entries = content.entries(entryIds)
+        var affected = 0
+        var picked = 0
+        for (id in entryIds.distinct()) {
+            val entry = entries[id] ?: continue
+            val sense = content.senses(entry.id).firstOrNull { it.ja.isNotEmpty() } ?: continue
+            val key = CardKey.of(CardKind.PRODUCE, entry.id)
+            val state = user.state(key)
+            when {
+                state == null -> {
+                    user.pick(listOf(entry.id), SOURCE_WRITING, now)
+                    user.introduce(key, CardKind.PRODUCE, entry.id, sense.id, MINE, "", now)
+                    picked++
+                    affected++
+                }
+                // Already waiting, or moved to the front of the queue: either way
+                // the learner will be asked for this word today, which is what
+                // the count they are shown means.
+                state.due <= now || user.bringForward(key, now) -> affected++
+            }
+        }
+        if (picked > 0 && MINE !in enabledDecks) enabledDecks = enabledDecks + MINE
+        return affected
+    }
+
     /** Take words from your own material into the study list. */
     fun pick(entryIds: List<Long>, source: String, now: Long = System.currentTimeMillis()): Int {
         val added = user.pick(entryIds, source, now)
@@ -767,6 +832,9 @@ class Repository(context: Context) {
         const val READABLE = TextSpan.READABLE
 
         const val MINE = "mine"
+
+        /** Marks words taken from a failed 和文英訳 in the picked list. */
+        const val SOURCE_WRITING = "writing"
 
         val LEVELS = listOf("A1", "A2", "B1", "B2", "C1", "C2")
 

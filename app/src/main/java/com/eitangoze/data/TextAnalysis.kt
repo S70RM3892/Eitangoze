@@ -80,6 +80,13 @@ data class TextReport(
     val coverage: Double,
     /** Every word occurrence, in order, with its memory curve. */
     val spans: List<TextSpan>,
+    /**
+     * Every distinct word of the text with what is known about it, including the
+     * ones no entry matched. Written English needs the whole list — a spelling
+     * nothing in the dictionary recognises, and a word used five times, are both
+     * things to say about a composition and neither is a gap to study.
+     */
+    val words: List<TextWord> = emptyList(),
     /** Words to learn, most blocking first. */
     val gaps: List<TextWord>,
     /** How many of [gaps] take coverage to 98%. */
@@ -116,8 +123,11 @@ data class TextReport(
         /** Below this, comprehension breaks down even with a dictionary to hand. */
         const val ASSISTED = 0.95
 
-        val EMPTY = TextReport("", 0, 0, emptyMap(), 0.0, emptyList(), emptyList(), 0,
-            emptyMap(), "—")
+        val EMPTY = TextReport(
+            text = "", tokens = 0, types = 0, byKnowledge = emptyMap(), coverage = 0.0,
+            spans = emptyList(), words = emptyList(), gaps = emptyList(), gapsToThreshold = 0,
+            levelProfile = emptyMap(), estimatedLevel = "—",
+        )
     }
 }
 
@@ -258,6 +268,7 @@ class TextAnalyzer(private val content: ContentDb) {
             byKnowledge = byKnowledge,
             coverage = known.toDouble() / tokens,
             spans = spans,
+            words = words,
             gaps = gaps,
             gapsToThreshold = needed,
             levelProfile = levelProfile,

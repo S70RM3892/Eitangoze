@@ -438,6 +438,89 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
         db.rawQuery("SELECT en, ja FROM sentence WHERE id = ?", arrayOf(id.toString()))
             .use { if (it.moveToFirst()) Example(it.getString(0), it.getString(1)) else null }
 
+    /**
+     * A pool of Japanese sentences to draw a 和文英訳 drill from.
+     *
+     * Drawn at random inside a length window and filtered afterwards by what the
+     * learner can read, rather than chosen by any property of the sentence
+     * itself: the corpus carries no difficulty label, and the only definition of
+     * "too hard" that matters here is this particular learner's vocabulary. The
+     * window keeps a sentence long enough to have a shape and short enough to
+     * hold in the head while writing it.
+     */
+    fun writingPool(minWords: Int = 6, maxWords: Int = 18, limit: Int = 60): List<Example> {
+        val out = ArrayList<Example>(limit)
+        // The bounds go into the statement rather than into arguments: a bound
+        // argument arrives as text, and SQLite sorts every integer below every
+        // string, so `BETWEEN '6' AND '18'` against a computed word count is
+        // false for every row in the table. They are Ints, so there is nothing
+        // to escape.
+        db.rawQuery(
+            "SELECT en, ja FROM sentence WHERE ja <> '' " +
+                "AND (length(en) - length(replace(en, ' ', '')) + 1) " +
+                "BETWEEN $minWords AND $maxWords " +
+                // Contracted forms are not in the dictionary, so `can't` would be
+                // measured as an unknown word and then asked for as one. They are
+                // also not what 和文英訳 is marked on.
+                "AND en NOT LIKE '%''%' AND en NOT LIKE '%’%' " +
+                "ORDER BY RANDOM() LIMIT ?",
+            arrayOf(limit.toString()),
+        ).use { c ->
+            while (c.moveToNext()) out.add(Example(c.getString(0), c.getString(1)))
+        }
+        return out
+    }
+
+    /**
+     * Every English the corpus pairs with one Japanese sentence.
+     *
+     * Tatoeba often has several, and they are all right — `失礼だが、上記の記事に
+     * ある３つの誤りを指摘しておきたい。` arrives with both `Excuse me; allow me to
+     * point out…` and `Excuse me, let me point out…`. A drill that held up one of
+     * them as *the* answer would be marking the corpus, not the learner.
+     */
+    fun parallels(ja: String, limit: Int = 8): Map<Long, String> {
+        val out = LinkedHashMap<Long, String>()
+        db.rawQuery(
+            "SELECT id, en FROM sentence WHERE ja = ? LIMIT ?",
+            arrayOf(ja, limit.toString()),
+        ).use { c ->
+            while (c.moveToNext()) out[c.getLong(0)] = c.getString(1)
+        }
+        return out
+    }
+
+    /**
+     * Collocations whose two halves both appear in a piece of writing.
+     *
+     * Only ever used to say what *is* attested. The table is 15,088 pairs, which
+     * is nowhere near all the English there is, so a pairing missing from it is
+     * no evidence of anything and is never reported as a mistake.
+     */
+    fun collocationsAmong(lemmas: Collection<String>, limit: Int = 40): List<Collocation> {
+        if (lemmas.size < 2) return emptyList()
+        val words = lemmas.map { it.lowercase() }.distinct().take(120)
+        val holes = words.joinToString(",") { "?" }
+        val args = words.map { it } + words + listOf(limit.toString())
+        val out = ArrayList<Collocation>()
+        db.rawQuery(
+            "SELECT entry_id, pattern, head, collocate, phrase, count, example " +
+                "FROM collocation WHERE head IN ($holes) AND collocate IN ($holes) " +
+                "ORDER BY score DESC LIMIT ?",
+            args.toTypedArray(),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    Collocation(
+                        c.getLong(0), c.getString(1), c.getString(2), c.getString(3),
+                        c.getString(4), c.getInt(5), c.getString(6),
+                    )
+                )
+            }
+        }
+        return out
+    }
+
     fun collocations(entryId: Long, limit: Int = 10): List<Collocation> {
         val out = ArrayList<Collocation>()
         db.rawQuery(

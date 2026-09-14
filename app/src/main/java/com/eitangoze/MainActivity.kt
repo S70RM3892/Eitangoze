@@ -32,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.eitangoze.ui.AppViewModel
 import com.eitangoze.ui.screens.BrowseScreen
 import com.eitangoze.ui.screens.EntryScreen
+import com.eitangoze.ui.screens.EssayScreen
 import com.eitangoze.ui.screens.FoldScreen
 import com.eitangoze.ui.screens.GridScreen
 import com.eitangoze.ui.screens.LibraryScreen
@@ -44,6 +45,7 @@ import com.eitangoze.ui.screens.ReaderScreen
 import com.eitangoze.ui.screens.SettingsScreen
 import com.eitangoze.ui.screens.StatsScreen
 import com.eitangoze.ui.screens.StudyScreen
+import com.eitangoze.ui.screens.WritingScreen
 import com.eitangoze.ui.theme.EitangozeTheme
 
 class MainActivity : ComponentActivity() {
@@ -70,6 +72,8 @@ class MainActivity : ComponentActivity() {
 private enum class Screen(val title: String) {
     HOME("Eitangoze"),
     STUDY("学習"),
+    WRITE("和文英訳"),
+    ESSAY("自由英作文"),
     READER("読めるか測る"),
     LIBRARY("英文を読む"),
     BROWSE("辞書"),
@@ -230,6 +234,8 @@ private fun App(
                         model.startStudy()
                         screen = Screen.STUDY
                     },
+                    onWrite = { screen = Screen.WRITE },
+                    onEssay = { screen = Screen.ESSAY },
                     onReader = { screen = Screen.READER },
                     onLibrary = { screen = Screen.LIBRARY },
                     onBrowse = { screen = Screen.BROWSE },
@@ -245,6 +251,8 @@ private fun App(
                     },
                     onOpenEntry = model::openEntry,
                 )
+                Screen.WRITE -> WritingScreen(model, onOpenEntry = model::openEntry)
+                Screen.ESSAY -> EssayScreen(model)
                 Screen.READER -> ReaderScreen(model, onOpenEntry = model::openEntry)
                 Screen.LIBRARY -> LibraryScreen(model, onOpen = model::openPassage)
                 Screen.BROWSE -> BrowseScreen(model, onOpenEntry = model::openEntry)

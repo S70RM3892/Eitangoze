@@ -128,6 +128,25 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION) 
         )
     }
 
+    /**
+     * Put a card back in today's queue without touching what is known about it.
+     *
+     * Used when a failure turns up outside the study screen — a word the learner
+     * could read but could not write. The memory model is left alone on purpose:
+     * the drill it failed in is not the card it will be asked as, so it is
+     * evidence that the card should come round again, not evidence about the
+     * strength of that memory. Returns false when it was already due.
+     */
+    fun bringForward(key: CardKey, now: Long): Boolean =
+        writableDatabase.compileStatement(
+            "UPDATE card SET due = ? WHERE key = ? AND due > ?"
+        ).use { statement ->
+            statement.bindLong(1, now)
+            statement.bindString(2, key.value)
+            statement.bindLong(3, now)
+            statement.executeUpdateDelete() > 0
+        }
+
     fun save(key: CardKey, state: SrsState) {
         val values = ContentValues().apply {
             put("stability", state.stability)
