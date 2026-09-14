@@ -189,7 +189,15 @@ class WritingTest {
                 if (!task.shortest.en.contains(word.lemma, ignoreCase = true)) continue
                 val related = repo.content.relations(word.id, limit = 20).firstOrNull {
                     it.kind == com.eitangoze.data.RelationKind.SYNONYM &&
-                        !it.other.lemma.contains(' ')
+                        !it.other.lemma.contains(' ') &&
+                        // The synonym has to be a spelling that reads back as
+                        // itself. `challenging` belongs to `challenge` the verb
+                        // in the form index, so writing it produces a different
+                        // entry than the relation names and the substitution is
+                        // invisible — a real limit of matching by entry, and not
+                        // what this test is about.
+                        repo.content.surfaces(setOf(it.other.lemma))[it.other.lemma] ==
+                        it.other.id
                 } ?: continue
                 return Triple(task, word.lemma, related.other.lemma)
             }

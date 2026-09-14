@@ -35,27 +35,6 @@ private val WORD = Regex("[A-Za-z][A-Za-z'’-]*")
 private val SENTENCE_END = Regex("[.!?]+")
 private val CONTRACTED = Regex("[A-Za-z]+['’][A-Za-z]+")
 
-/**
- * Where vocabulary stops and grammar starts, by corpus frequency.
- *
- * [EntryKind.FUNCTION] would be the right test, but the shipped dictionary
- * takes that label from Wiktionary's part of speech rather than from frequency,
- * so `the` and `of` carry it while `be`, `to`, `have`, `do` and `a` do not — and
- * those resolve to the ordinary headword because it has the lower rank. For
- * reading that hardly matters. For writing it matters a great deal: nobody
- * fails to produce `to`, and reporting it as a word the learner could read but
- * not write would discredit every other line on the screen.
- *
- * The cut is the corpus's own: ranks 1–71 are the, be, and, of, to, a, in, have,
- * it, you, he, for, they, not, that, we, on, with, this, i, do, as, at, she,
- * but, from, by, will, or — every one of them structure. The first content word
- * in the list is `say`, at 72.
- */
-private const val GRAMMAR_RANK = 71
-
-private val Entry.isGrammar: Boolean
-    get() = kind == EntryKind.FUNCTION || (rank in 1..GRAMMAR_RANK)
-
 /** One English the corpus offers for a Japanese sentence, with its content words. */
 data class Reference(
     val id: Long,
@@ -298,7 +277,7 @@ class WritingDrill(private val content: ContentDb) {
 
     /** Everything in a text but the grammar words, deduplicated, in order. */
     private fun contentWords(report: TextReport): List<Entry> =
-        report.words.mapNotNull { it.entry }.filterNot { it.isGrammar }
+        report.words.mapNotNull { it.entry }.filterNot { it.isStructural }
 
     /**
      * Share of a sentence's content words the learner can read on sight.
@@ -311,7 +290,7 @@ class WritingDrill(private val content: ContentDb) {
         var total = 0
         var known = 0
         for (word in report.words) {
-            if (word.entry?.isGrammar == true) continue
+            if (word.entry?.isStructural == true) continue
             total++
             if (word.knowledge == Knowledge.KNOWN) known++
         }
@@ -391,14 +370,14 @@ class EssayReader(private val content: ContentDb) {
             return EssayCheck(text, 0, 0, emptyMap(), emptyList(), emptyList(), emptyList())
         }
         val report = analyze(text)
-        val used = report.words.mapNotNull { it.entry }.filterNot { it.isGrammar }
+        val used = report.words.mapNotNull { it.entry }.filterNot { it.isStructural }
         return EssayCheck(
             text = text,
             words = words,
             sentences = SENTENCE_END.findAll(text).count().coerceAtLeast(1),
             levelProfile = report.levelProfile,
             repeated = report.words
-                .filter { it.occurrences >= 3 && it.entry?.isGrammar == false }
+                .filter { it.occurrences >= 3 && it.entry?.isStructural == false }
                 .sortedByDescending { it.occurrences },
             // `don't` and `we're` are in nobody's dictionary here; calling them
             // unknown spellings would be reporting this app's own gap as the

@@ -12,7 +12,7 @@ import kotlin.math.min
 import kotlin.random.Random
 
 /** Everything the screens talk to. Owns both databases and the scheduler. */
-class Repository(context: Context) {
+class Repository(context: Context, private val random: Random = Random.Default) {
 
     val content: ContentDb = ContentDb.open(context)
     val passages: PassageDb = PassageDb.open(context)
@@ -150,9 +150,13 @@ class Repository(context: Context) {
     /**
      * Create study rows for material not seen before, in teaching order.
      *
-     * A word arrives with all of its enabled question types at once, so the
-     * first encounter covers recognition, production and context together. The
-     * budget counts cards, not words, which is what actually costs time.
+     * A word arrives with [PER_WORD] of its question types, not all of them at
+     * once: `say` has six meanings and makes fourteen cards, which in a
+     * twenty-card session is not a session about English, it is a session about
+     * `say`. The rest of a word's questions are created the next time round —
+     * hence the words already started are offered before any new ones.
+     *
+     * The budget counts cards, not words, which is what actually costs time.
      */
     private fun introduceNew(
         decks: List<String>,
@@ -166,19 +170,36 @@ class Repository(context: Context) {
             if (left <= 0) continue
             val deck = Deck.byId(deckId) ?: continue
             val taken = user.introducedEntries(CardKind.MEANING, deckId)
+            val wanted = max(4, left / 2 + 2)
             val entries = if (deck.custom) {
-                val ids = user.pickedEntries().filter { it !in taken }.take(max(4, left / 2 + 2))
+                // The learner chose these and chose their order; leave it alone.
+                val ids = user.pickedEntries().filter { it !in taken }.take(wanted)
                 val byId = content.entries(ids)
                 ids.mapNotNull { byId[it] }
             } else {
-                content.deckEntries(deck, taken, limit = max(4, left / 2 + 2))
+                // Frequency decides roughly what comes next, chance decides
+                // exactly. Strict rank order means every learner meets the same
+                // words in the same sequence for months, and a session you have
+                // already seen the shape of is a session you skim. The window is
+                // a multiple of what is needed rather than the whole deck, so
+                // the next words are still the commonest ones left.
+                content.deckEntries(deck, taken, limit = wanted * NEW_WINDOW)
+                    .shuffled(random)
+                    .take(wanted)
             }
-            for (entry in entries) {
+            // Words already started come first: their remaining question types
+            // are owed, and finishing them is what keeps [PER_WORD] from losing
+            // cards rather than merely spreading them out.
+            val unfinished = content.entries(user.recentlyIntroduced(deckId, limit = 30))
+                .values.sortedBy { it.rank }
+            for (entry in unfinished + entries) {
                 if (left <= 0) break
+                var made = 0
                 val specs = factory.specs(entry, deckId, kinds)
                 for (spec in specs) {
-                    if (left <= 0) break
+                    if (left <= 0 || made >= PER_WORD) break
                     if (user.state(spec.key) != null) continue
+                    made++
                     user.introduce(spec.key, spec.kind, spec.entryId, spec.senseId,
                         deckId, spec.extra, now)
                     out.add(
@@ -224,11 +245,25 @@ class Repository(context: Context) {
      */
     private fun spaceOutSiblings(cards: List<StudyCard>): List<StudyCard> {
         val remaining = cards.toMutableList()
+        val left = HashMap<Long, Int>()
+        cards.forEach { left[it.entry.id] = (left[it.entry.id] ?: 0) + 1 }
         val out = ArrayList<StudyCard>(cards.size)
         while (remaining.isNotEmpty()) {
             val previous = out.lastOrNull()?.entry?.id
-            val index = remaining.indexOfFirst { it.entry.id != previous }
-            out.add(remaining.removeAt(if (index >= 0) index else 0))
+            // Of the words that may come next, take the one with the most cards
+            // still to place. Taking whichever card came first instead — which
+            // is what this did — empties the words with few cards early and
+            // leaves a run of one word at the end, which is the arrangement the
+            // whole step exists to avoid. Going by what is left over cannot
+            // paint itself into that corner unless one word really is more than
+            // half the session.
+            val index = remaining.indices
+                .filter { remaining[it].entry.id != previous }
+                .maxByOrNull { left[remaining[it].entry.id] ?: 0 }
+                ?: 0
+            val card = remaining.removeAt(index)
+            left[card.entry.id] = (left[card.entry.id] ?: 1) - 1
+            out.add(card)
         }
         return out
     }
@@ -840,6 +875,12 @@ class Repository(context: Context) {
 
         /** Days before the exam over which the retention target is tightened. */
         const val RAMP_DAYS = 60.0
+
+        /** How many candidates one new word is drawn from. See `introduceNew`. */
+        const val NEW_WINDOW = 4
+
+        /** How many questions about one word may be created in a single session. */
+        const val PER_WORD = 4
 
         fun startOfDay(at: Long): Long {
             val cal = Calendar.getInstance()

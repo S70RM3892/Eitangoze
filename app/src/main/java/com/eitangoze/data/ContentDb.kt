@@ -90,9 +90,10 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
             args.add(it); args.add("$it|%"); args.add("%|$it"); args.add("%|$it|%")
         }
         if (deck.kind == null) where.append(" AND kind = 'word'")
+        where.append(" AND $TEACHABLE")
         val out = ArrayList<Entry>(limit)
         db.rawQuery(
-            "SELECT $entryColumns FROM entry WHERE $where ORDER BY rank LIMIT ?",
+            "SELECT $entryColumns FROM entry e WHERE $where ORDER BY rank LIMIT ?",
             (args + ((limit + exclude.size) * 2).coerceAtMost(20000).toString()).toTypedArray(),
         ).use { c ->
             while (c.moveToNext() && out.size < limit) {
@@ -114,7 +115,8 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
             args.add(it); args.add("$it|%"); args.add("%|$it"); args.add("%|$it|%")
         }
         if (deck.kind == null) where.append(" AND kind = 'word'")
-        return db.rawQuery("SELECT COUNT(*) FROM entry WHERE $where", args.toTypedArray())
+        where.append(" AND $TEACHABLE")
+        return db.rawQuery("SELECT COUNT(*) FROM entry e WHERE $where", args.toTypedArray())
             .use { if (it.moveToFirst()) it.getInt(0) else 0 }
     }
 
@@ -556,15 +558,36 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
     }
 
     /**
+     * Every entry the decks will never teach. See [TEACHABLE]; loaded once,
+     * because [surfaces] needs the answer for a few hundred words at a time and
+     * the sibling test is too slow to ask per row.
+     */
+    private val untaught: Set<Long> by lazy {
+        val out = HashSet<Long>()
+        db.rawQuery("SELECT id FROM entry e WHERE NOT ($TEACHABLE)", null)
+            .use { c -> while (c.moveToNext()) out.add(c.getLong(0)) }
+        out
+    }
+
+    /**
      * Match spellings from a text to entries.
      *
      * Returns the best entry per spelling: where a form belongs to several
      * entries (`run` the noun and the verb), the one taught earliest wins, since
      * that is the reading a learner meets first and the one their card records.
+     *
+     * "Taught" has to mean it, though. `so` the conjunction outranks `so` the
+     * adverb and `one` the numeral outranks `one` the noun, and neither of those
+     * is ever taught — so reading would credit a memory that can never exist and
+     * the word would count as unknown however much the learner studied it. A
+     * spelling goes to the best entry the decks can actually teach, and only
+     * falls back to the rest when there is none: reading still has to recognise
+     * every word, including the ones nobody is quizzed on.
      */
     fun surfaces(forms: Collection<String>): Map<String, Long> {
         if (forms.isEmpty()) return emptyMap()
         val best = HashMap<String, Pair<Long, Int>>()
+        val fallback = HashMap<String, Pair<Long, Int>>()
         forms.chunked(300).forEach { chunk ->
             val holes = chunk.joinToString(",") { "?" }
             db.rawQuery(
@@ -576,11 +599,13 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
                     val form = c.getString(0)
                     val id = c.getLong(1)
                     val rank = c.getInt(2)
-                    val current = best[form]
-                    if (current == null || rank < current.second) best[form] = id to rank
+                    val into = if (id in untaught) fallback else best
+                    val current = into[form]
+                    if (current == null || rank < current.second) into[form] = id to rank
                 }
             }
         }
+        fallback.forEach { (form, hit) -> best.putIfAbsent(form, hit) }
         return best.mapValues { it.value.first }
     }
 
@@ -658,6 +683,43 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
 
         /** How many Japanese glosses one meaning may show. */
         private const val MAX_GLOSSES = 5
+
+        /**
+         * What may be *taught*, as opposed to what the dictionary knows.
+         *
+         * The dictionary is built from Wiktionary and keeps everything it can
+         * stand behind, including facts nobody should be quizzed on. Two of
+         * those leak into the decks, and both did:
+         *
+         * - **Structure is not vocabulary.** See [Entry.isStructural]. The
+         *   ordinary senses of `be`, `and`, `we` carry no Japanese, so the gloss
+         *   that survived was the leftover one — `be` 「ベリリウム」, `and`
+         *   「アンド」, `we` 「朕」 — and because rank is the lemma's, these sat
+         *   at the very top of the A1 deck. They were the first cards anyone saw.
+         *
+         * - **A spelling with several parts of speech is taught in the one the
+         *   corpus actually uses.** `say` is a verb; `say` the noun (意見) is
+         *   real English and not what anyone means by learning `say`. Where a
+         *   sense-tagged corpus attests one entry of a lemma and not another,
+         *   only the attested one is taught. Where it attests none — SemCor
+         *   covers 360,000 words, not the language — nothing is dropped, so a
+         *   word it never saw (`bike`, `cake`, `burger`) is unaffected.
+         *
+         * Nothing is deleted: every row stays searchable in the dictionary,
+         * where `be` 「ベリリウム」 is a true thing to be able to look up.
+         */
+        private const val TEACHABLE =
+            "e.rank > ${Entry.STRUCTURE_RANK} AND (" +
+                "EXISTS (SELECT 1 FROM sense s WHERE s.entry_id = e.id " +
+                "AND s.ja <> '' AND s.semcor > 0) OR NOT EXISTS (" +
+                // The index hint is not decoration: without it the planner walks
+                // entry(kind, rank) for every candidate and counting one deck
+                // takes twelve seconds.
+                "SELECT 1 FROM entry o INDEXED BY entry_lemma " +
+                "WHERE o.lemma = e.lemma AND o.id <> e.id AND o.kind = 'word' " +
+                "AND o.rank > ${Entry.STRUCTURE_RANK} AND EXISTS (" +
+                "SELECT 1 FROM sense s WHERE s.entry_id = o.id " +
+                "AND s.ja <> '' AND s.semcor > 0)))"
 
         // Deliberately not named `.gz`: the Android asset merger expands any
         // asset with that extension at build time, which would put 31 MB of

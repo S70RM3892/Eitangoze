@@ -3,6 +3,7 @@ package com.eitangoze
 import androidx.test.core.app.ApplicationProvider
 import com.eitangoze.data.AnswerMode
 import com.eitangoze.data.CardKind
+import com.eitangoze.data.Entry
 import com.eitangoze.data.Repository
 import com.eitangoze.srs.CardPhase
 import com.eitangoze.srs.Rating
@@ -50,9 +51,12 @@ class RepositoryTest {
             assertTrue(card.instruction.isNotBlank())
             assertTrue(card.prompt.isNotBlank())
         }
-        // The words introduced first are the ones taught first.
+        // The words introduced first are the ones taught first — but not in a
+        // fixed order, and never the grammar words at the very top of the
+        // frequency list, which the app does not teach at all.
         val ranks = queue.map { it.entry.rank }.distinct()
-        assertTrue("started at rank ${ranks.first()}", ranks.first() < 60)
+        assertTrue("taught structure: rank ${ranks.min()}", ranks.min() > Entry.STRUCTURE_RANK)
+        assertTrue("started at rank ${ranks.first()}", ranks.first() < 600)
     }
 
     @Test
@@ -125,7 +129,16 @@ class RepositoryTest {
         repo.enabledKinds = CardKind.entries.toSet()
         repo.newPerDay = 120
 
-        val kinds = repo.buildQueue(limit = 400).map { it.kind }.toSet()
+        // A word gets four of its question types a day and the rest the next
+        // time round, so the repertoire is a week's worth rather than a
+        // session's: collocation and word-root cards sit behind recognition and
+        // production in every word's list and would never appear in one sitting.
+        val kinds = (0..6).flatMap { day ->
+            repo.buildQueue(
+                now = System.currentTimeMillis() + day * Repository.DAY_MS,
+                limit = 400,
+            ).map { it.kind }
+        }.toSet()
         // Not every word has a collocation or a root, but across four decks the
         // whole repertoire should turn up.
         for (kind in CardKind.entries) {

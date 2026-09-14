@@ -23,7 +23,15 @@ import java.util.zip.GZIPInputStream
  */
 class PassageDb private constructor(private val db: SQLiteDatabase) {
 
-    val passageCount: Int by lazy { meta("passages")?.toIntOrNull() ?: 0 }
+    /**
+     * How many passages the library offers — counted, not read off the build
+     * metadata, because a handful of what was collected is not English and is
+     * never shelved. See [READABLE].
+     */
+    val passageCount: Int by lazy {
+        db.rawQuery("SELECT COUNT(*) FROM passage WHERE $READABLE", null)
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+    }
     val sentenceCount: Int by lazy { meta("sentences")?.toIntOrNull() ?: 0 }
     val agreedCount: Int by lazy { meta("agreed")?.toIntOrNull() ?: 0 }
 
@@ -67,9 +75,10 @@ class PassageDb private constructor(private val db: SQLiteDatabase) {
         limit: Int = 40,
     ): List<Passage> {
         val where = buildList {
+            add(READABLE)
             if (genre != null) add("genre = '${genre.code}'")
             if (cefr != null) add("cefr = '${cefr}'")
-        }.joinToString(" AND ").ifEmpty { "1" }
+        }.joinToString(" AND ")
         val out = ArrayList<Passage>()
         db.rawQuery(
             "SELECT $passageColumns FROM passage WHERE $where ORDER BY RANDOM() LIMIT ?",
@@ -82,7 +91,8 @@ class PassageDb private constructor(private val db: SQLiteDatabase) {
     fun shelf(): List<Triple<Genre, String, Int>> {
         val out = ArrayList<Triple<Genre, String, Int>>()
         db.rawQuery(
-            "SELECT genre, cefr, COUNT(*) FROM passage GROUP BY genre, cefr", null,
+            "SELECT genre, cefr, COUNT(*) FROM passage WHERE $READABLE " +
+                "GROUP BY genre, cefr", null,
         ).use { c ->
             while (c.moveToNext()) {
                 out.add(Triple(Genre.of(c.getString(0)), c.getString(1), c.getInt(2)))
@@ -125,6 +135,19 @@ class PassageDb private constructor(private val db: SQLiteDatabase) {
     companion object {
         /** Bumped whenever a release ships a different passage library. */
         const val VERSION = 1
+
+        /**
+         * A passage worth handing to a reader of English.
+         *
+         * `coverable` is the share of a passage's running words the dictionary
+         * can account for at all — its ceiling, whatever anyone studies. Four of
+         * the 4,126 collected sit far under it: a Korean-language paper that
+         * reached the medicine genre, a volume of Cicero that is mostly Latin,
+         * and two biographies thick with names. They are not hard English, they
+         * are not English, and putting one in front of a learner as "the passage
+         * for you" would be the app failing loudly.
+         */
+        private const val READABLE = "coverable >= 0.5"
 
         // Not `.gz`: the Android asset merger expands assets with that extension.
         private const val ASSET = "passages.dbz"

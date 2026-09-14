@@ -201,8 +201,12 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION) 
         val holes = decks.joinToString(",") { "?" }
         val out = ArrayList<DueCard>()
         readableDatabase.rawQuery(
+            // Cards introduced together share a due time to the millisecond,
+            // so plain `ORDER BY due` hands them back in the order they were
+            // created — the same running order every session until the first
+            // review moves them apart. The tie-break is what stops that.
             "SELECT $DUE_COLUMNS FROM card WHERE deck IN ($holes) AND due <= ? " +
-                "ORDER BY due LIMIT ?",
+                "ORDER BY due, RANDOM() LIMIT ?",
             (decks + listOf(now.toString(), limit.toString())).toTypedArray(),
         ).use { c -> while (c.moveToNext()) out.add(readDue(c)) }
         return out
@@ -217,6 +221,23 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION) 
             "SELECT $DUE_COLUMNS FROM card WHERE deck IN ($holes)",
             decks.toTypedArray(),
         ).use { c -> while (c.moveToNext()) out.add(readDue(c)) }
+        return out
+    }
+
+    /**
+     * The words of a deck whose study started most recently, newest first.
+     *
+     * A word does not arrive with every question type at once any more — four a
+     * day, so that one word with six meanings cannot fill a session — so the
+     * next session has to know where to go back and finish.
+     */
+    fun recentlyIntroduced(deck: String, limit: Int): List<Long> {
+        val out = ArrayList<Long>(limit)
+        readableDatabase.rawQuery(
+            "SELECT entry_id, MAX(created) AS started FROM card WHERE deck = ? " +
+                "GROUP BY entry_id ORDER BY started DESC LIMIT ?",
+            arrayOf(deck, limit.toString()),
+        ).use { c -> while (c.moveToNext()) out.add(c.getLong(0)) }
         return out
     }
 

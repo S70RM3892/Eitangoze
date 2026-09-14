@@ -72,6 +72,31 @@ data class Entry(
 ) {
     val isPhrase: Boolean get() = kind != EntryKind.WORD
 
+    /**
+     * True for the words English is built out of rather than made of: the, be,
+     * and, of, to, a, in, have, it, you…
+     *
+     * [EntryKind.FUNCTION] is meant to carry this and does not: the label comes
+     * from Wiktionary's part of speech, so `the` and `of` have it while `be`,
+     * `to`, `have`, `do` and `a` do not — and those resolve to the ordinary
+     * headword, which has the lower rank. Frequency settles it instead. Ranks
+     * 1–71 are the, be, and, of, to, a, in, have, it, you, he, for, they, not,
+     * that, we, on, with, this, i, do, as, at, she, but, from, by, will, or:
+     * every one of them structure, and the first content word in the list is
+     * `say` at 72.
+     *
+     * Nothing here is taught. A learner meets these before the app does, and the
+     * dictionary has no usable Japanese for them anyway — Wiktionary leaves the
+     * ordinary senses unglossed, so the only gloss that survives is an exotic
+     * one and the card ends up claiming `be` means ベリリウム.
+     */
+    val isStructural: Boolean get() = kind == EntryKind.FUNCTION || rank in 1..STRUCTURE_RANK
+
+    companion object {
+        /** The last rank that is grammar rather than vocabulary. See [isStructural]. */
+        const val STRUCTURE_RANK = 71
+    }
+
     /** Every spelling this entry can appear as in a sentence. */
     fun surfaces(): List<String> = buildList {
         add(lemma)

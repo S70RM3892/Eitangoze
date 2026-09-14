@@ -161,7 +161,13 @@ class ReaderTest {
 
         // An A1 word actually answered wrong stops counting as read.
         repo.enabledDecks = listOf("A1")
-        val card = repo.buildQueue().first()
+        // A spelling belongs to one entry when a text is measured — reading has
+        // no parser to tell `time` the noun from `time` the verb — so the card
+        // has to be one whose own spelling comes back to it, or the answer would
+        // be recorded against a different entry than the text credits.
+        val card = repo.buildQueue().first { card ->
+            repo.content.surfaces(setOf(card.entry.lemma))[card.entry.lemma] == card.entry.id
+        }
         repo.answer(card, Rating.AGAIN, correct = false)
         val text = "${card.entry.lemma} ${card.entry.lemma} ${card.entry.lemma}"
         val after = repo.analyze(text)

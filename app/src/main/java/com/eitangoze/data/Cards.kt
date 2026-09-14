@@ -81,11 +81,16 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
 
         // Telling meanings apart only makes sense when there are meanings to
         // confuse, and only when an example pins the one being asked about.
+        //
+        // At most [MAX_CONTEXT] of them, most-used first. `say` has six senses;
+        // six context cards for one word is not learning the word, it is a
+        // quiz about WordNet, and it lets a single word fill an entire session.
+        // Which six matter is already known — the corpus counted them.
         if (senses.size >= 2) {
-            for (sense in senses) {
-                val hasExample = content.senseExamples(sense).any { it.en.isNotBlank() }
-                if (hasExample) add(CardKind.CONTEXT, sense.id, sense.id.toString())
-            }
+            senses.sortedByDescending { it.semcor }
+                .filter { sense -> content.senseExamples(sense).any { it.en.isNotBlank() } }
+                .take(MAX_CONTEXT)
+                .forEach { add(CardKind.CONTEXT, it.id, it.id.toString()) }
         }
 
         content.sentences(entry.id, limit = 2).forEach {
@@ -360,6 +365,9 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
     }
 
     companion object {
+        /** How many meanings of one word are worth telling apart on sight. */
+        const val MAX_CONTEXT = 3
+
         fun tagJa(tag: String): String = when (tag) {
             "transitive" -> "他動詞"
             "intransitive" -> "自動詞"
