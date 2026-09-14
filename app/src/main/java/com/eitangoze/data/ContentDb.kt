@@ -685,6 +685,19 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
         private const val MAX_GLOSSES = 5
 
         /**
+         * A meaning that is a chemical symbol, an element or the name of a
+         * letter — true of the spelling, and never what a learner is asking
+         * when they ask what the word means. Only ever applied to one- and
+         * two-letter spellings: `sodium` really does mean ナトリウム.
+         */
+        private const val SYMBOL =
+            "s.def_en LIKE '%chemical element%' OR s.def_en LIKE '%metallic element%' " +
+                "OR s.def_en LIKE '%nonmetallic element%' " +
+                "OR s.def_en LIKE '%radioactive%element%' " +
+                "OR s.def_en LIKE '%The name of the%letter%' " +
+                "OR s.def_en LIKE '%symbol for%'"
+
+        /**
          * What may be *taught*, as opposed to what the dictionary knows.
          *
          * The dictionary is built from Wiktionary and keeps everything it can
@@ -705,6 +718,16 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
          *   covers 360,000 words, not the language — nothing is dropped, so a
          *   word it never saw (`bike`, `cake`, `burger`) is unaffected.
          *
+         * - **A spelling of one or two letters has to be vouched for.** The
+         *   dictionary holds the chemical symbols, the letter names, the units
+         *   and the US state codes: `cd` 「カドミウム」, `mm` 「ミリメートル」,
+         *   `sc` 「スカンジウム」, `el` 「エル」, `vt` 「バーモント州」. None is a
+         *   word anybody learns, and the published word lists agree — they are
+         *   the ones with no CEFR-J, NGSL, NAWL or TSL entry at all. A short
+         *   spelling is taught when a list has it (`go` `up` `no` `hi` `ox`
+         *   `pi`) and not otherwise, and never when the meaning that would be
+         *   taught is an element or a letter (`am` 「アメリシウム」).
+         *
          * Nothing is deleted: every row stays searchable in the dictionary,
          * where `be` 「ベリリウム」 is a true thing to be able to look up.
          */
@@ -719,7 +742,13 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
                 "WHERE o.lemma = e.lemma AND o.id <> e.id AND o.kind = 'word' " +
                 "AND o.rank > ${Entry.STRUCTURE_RANK} AND EXISTS (" +
                 "SELECT 1 FROM sense s WHERE s.entry_id = o.id " +
-                "AND s.ja <> '' AND s.semcor > 0)))"
+                "AND s.ja <> '' AND s.semcor > 0))) AND (" +
+                // The length test comes first so the rest is only ever asked
+                // about the few hundred one- and two-letter spellings.
+                "length(e.lemma) > 2 OR (e.lists <> '' AND NOT EXISTS (" +
+                "SELECT 1 FROM sense s WHERE s.entry_id = e.id AND s.ja <> '' " +
+                "AND s.ord = (SELECT MIN(m.ord) FROM sense m " +
+                "WHERE m.entry_id = e.id AND m.ja <> '') AND ($SYMBOL))))"
 
         // Deliberately not named `.gz`: the Android asset merger expands any
         // asset with that extension at build time, which would put 31 MB of

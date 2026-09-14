@@ -106,6 +106,31 @@ class TeachableTest {
         }
     }
 
+    /**
+     * The dictionary holds every chemical symbol, letter name, unit and US
+     * state code as a one- or two-letter headword: `cd` 「カドミウム」,
+     * `mm` 「ミリメートル」, `sc` 「スカンジウム」, `el` 「エル」. `be` was the
+     * one that got reported, but `am` 「アメリシウム」 and `cd` sat in A1 behind
+     * it. None is a word anybody learns, and the published word lists say so by
+     * not having them.
+     */
+    @Test
+    fun `a two-letter spelling is taught only when a word list vouches for it`() {
+        val everywhere = listOf("A1", "A2", "B1", "B2", "C1", "C2").flatMap { level ->
+            repo.content.deckEntries(
+                Deck.byId(level)!!, exclude = emptySet(), limit = 6000,
+            )
+        }.map { it.lemma }.toSet()
+
+        listOf("am", "cd", "mm", "cm", "sc", "el", "en", "ba", "fe", "vt", "nc")
+            .forEach { assertTrue("$it is still taught", it !in everywhere) }
+        // The short words that are words stay: every one of these is in CEFR-J,
+        // NGSL or NAWL.
+        listOf("go", "up", "no", "hi", "ox", "pi", "pa").forEach {
+            assertTrue("$it was dropped with the symbols", it in everywhere)
+        }
+    }
+
     /** Nothing was deleted: the dictionary still knows what it knew. */
     @Test
     fun `the dictionary still answers for the words the decks skip`() {
