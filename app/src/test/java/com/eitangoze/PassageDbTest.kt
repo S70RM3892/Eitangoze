@@ -66,7 +66,11 @@ class PassageDbTest {
     @Test
     fun `token offsets land on the words they claim`() {
         var checked = 0
-        db.passages(limit = 12).forEach { passage ->
+        // The draw is random and a third of the shipped passages carry no parse
+        // at all (they were collected ahead of the parser), so twelve of them
+        // sometimes came to fewer than a hundred sentences and failed a test
+        // that was not about how many there are.
+        db.passages(limit = 40).forEach { passage ->
             db.sentences(passage.id).take(20).forEach { sentence ->
                 assertEquals(sentence.size, sentence.heads.size)
                 assertEquals(sentence.size, sentence.deps.size)
