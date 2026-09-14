@@ -183,7 +183,10 @@ class WritingDrill(private val content: ContentDb) {
         if (parallels.isEmpty()) return null
         var readiness = 0.0
         val references = parallels.entries
-            .distinctBy { it.value.trim() }
+            // Typographic twins are one translation, not two: showing both
+            // fills the screen with a sentence the reader has already read, and
+            // leaves the comparison picking between identical things.
+            .distinctBy { plain(it.value) }
             .map { (id, en) ->
                 val report = analyze(en)
                 readiness = maxOf(readiness, readiness(report))
@@ -217,15 +220,27 @@ class WritingDrill(private val content: ContentDb) {
         val plain = plain(written)
 
         val closest = task.references.maxWithOrNull(
-            compareBy<Reference> { reference ->
-                if (reference.content.isEmpty()) 0.0
-                else reference.content.count { it.id in mineIds }.toDouble() / reference.content.size
-            }
-                .thenBy { it.content.count { word -> word.id in mineIds } }
+            // Writing a translation out exactly is not evidence to be weighed
+            // against the others, it settles the question: that is the sentence
+            // they wrote. It has to come first. Ranked below the overlap — where
+            // it was — a second translation could still win by being longer,
+            // because a longer one shares more words with the shorter one it
+            // paraphrases, and the screen would bold a sentence the learner had
+            // not written while claiming it was the closest to what they had.
+            compareBy<Reference> { if (plain.isNotEmpty() && plain(it.en) == plain) 1 else 0 }
                 .thenBy { reference ->
-                    WORD.findAll(reference.en.lowercase()).count { it.value in typed }
+                    if (reference.content.isEmpty()) 0.0
+                    else reference.content.count { it.id in mineIds }.toDouble() /
+                        reference.content.size
                 }
-                .thenBy { if (plain.isNotEmpty() && plain(it.en) == plain) 1 else 0 }
+                .thenBy { it.content.count { word -> word.id in mineIds } }
+                // A share, not a count: counting words rewards the longest
+                // translation for being long, which is the same trap again.
+                .thenBy { reference ->
+                    val words = WORD.findAll(reference.en.lowercase()).map { it.value }.toList()
+                    if (words.isEmpty()) 0.0
+                    else words.count { it in typed }.toDouble() / words.size
+                }
         ) ?: task.shortest
 
         val matched = closest.content.filter { it.id in mineIds }
@@ -271,9 +286,15 @@ class WritingDrill(private val content: ContentDb) {
         return Substitution(expected = expected, used = relation.other, kind = relation.kind)
     }
 
-    /** Letters and spacing only, for asking whether two sentences are the same one. */
+    /**
+     * Letters and digits only, for asking whether two sentences are the same one.
+     *
+     * Punctuation and spacing go because the corpus has the same sentence twice
+     * over them — `6,000` beside `6000` — while digits stay, because `2 cats`
+     * and `two cats` are two different sentences to have written.
+     */
     private fun plain(text: String): String =
-        WORD.findAll(text.lowercase()).joinToString(" ") { it.value }
+        text.lowercase().filter { it.isLetterOrDigit() }
 
     /** Everything in a text but the grammar words, deduplicated, in order. */
     private fun contentWords(report: TextReport): List<Entry> =

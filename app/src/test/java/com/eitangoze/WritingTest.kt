@@ -136,7 +136,11 @@ class WritingTest {
      * content word matches both, so nothing in the overlap picks one, and the
      * screen still prints one of them in bold as the closest to what you wrote.
      * Roughly two in five multi-translation items are that shape, which is why
-     * this test walks several of them rather than the first one it finds.
+     * this test walks several of them rather than the first one it finds — and
+     * why writing a translation out exactly has to settle the question outright
+     * rather than being weighed against the others. Weighed, it loses: a longer
+     * translation shares more words with the shorter one it paraphrases, so it
+     * won on the tie-break and the screen bolded a sentence nobody had written.
      */
     @Test
     fun `the attempt is compared against whichever reference it came closest to`() {
@@ -144,7 +148,7 @@ class WritingTest {
             .asSequence()
             .mapNotNull { ja -> drill().task(ja) { repo.analyze(it) } }
             .filter { it.references.size >= 2 }
-            .take(5)
+            .take(12)
             .toList()
         assertTrue("no Japanese with two translations in a pool of 400", tasks.isNotEmpty())
 
