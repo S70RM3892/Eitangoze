@@ -80,7 +80,8 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         add(CardKind.PRODUCE, senses.first().id)
 
         // Telling meanings apart only makes sense when there are meanings to
-        // confuse, and only when an example pins the one being asked about.
+        // confuse, and only when an example pins the one being asked about —
+        // an example the word is actually *in*. See [contextExample].
         //
         // At most [MAX_CONTEXT] of them, most-used first. `say` has six senses;
         // six context cards for one word is not learning the word, it is a
@@ -88,18 +89,18 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         // Which six matter is already known — the corpus counted them.
         if (senses.size >= 2) {
             senses.sortedByDescending { it.semcor }
-                .filter { sense -> content.senseExamples(sense).any { it.en.isNotBlank() } }
+                .filter { contextExample(entry, it) != null }
                 .take(MAX_CONTEXT)
                 .forEach { add(CardKind.CONTEXT, it.id, it.id.toString()) }
         }
 
         content.sentences(entry.id, limit = 2).forEach {
-            add(CardKind.CLOZE, senses.first().id, it.id.toString())
+            if (blanksCleanly(entry, it)) add(CardKind.CLOZE, senses.first().id, it.id.toString())
             add(CardKind.COMPOSITION, senses.first().id, it.id.toString())
         }
 
         content.collocations(entry.id, limit = 3).forEach {
-            add(CardKind.COLLOCATION, senses.first().id, it.collocate)
+            if (!leaksAnswer(it)) add(CardKind.COLLOCATION, senses.first().id, it.collocate)
         }
 
         if (entry.kind == EntryKind.PHRASAL_VERB && entry.lemma.contains(' ')) {
@@ -148,10 +149,23 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         if (sense.antonyms.isNotEmpty()) add("対義" to sense.antonyms.joinToString(", "))
     }
 
+    /**
+     * One meaning as it goes on a button.
+     *
+     * Capped, because a sense can carry eight glosses and four of those side by
+     * side is not a question anyone reads — and because every option has to be
+     * the same shape. See [ContentDb.distractorMeanings].
+     */
+    private fun choiceLine(sense: Sense): String =
+        sense.ja.take(MAX_CHOICE_GLOSSES).joinToString("、")
+
     private fun meaning(card: UserDb.DueCard, entry: Entry, senses: List<Sense>): StudyCard? {
         val sense = senses.firstOrNull() ?: return null
-        val correct = sense.jaLine
-        val distractors = content.distractorMeanings(entry, setOf(correct) + sense.ja, 3)
+        val correct = choiceLine(sense)
+        val distractors = content.distractorMeanings(
+            entry, setOf(correct) + sense.ja, 3,
+            glosses = sense.ja.take(MAX_CHOICE_GLOSSES).size,
+        )
         val choices = (listOf(correct) + distractors).shuffled(random)
         return StudyCard(
             key = card.key, kind = card.kind, deck = card.deck, entry = entry, sense = sense,
@@ -163,11 +177,36 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
             correctIndex = choices.indexOf(correct),
             accepted = sense.ja,
             answerTitle = correct,
-            answerNotes = senseNotes(sense) + senses.drop(1).take(3)
-                .map { "他の意味 ${it.ord + 1}" to it.jaLine },
+            answerNotes = buildList {
+                // The button holds three; the rest belong to the meaning too.
+                if (sense.ja.size > MAX_CHOICE_GLOSSES) add("訳語" to sense.jaLine)
+                addAll(senseNotes(sense))
+                senses.drop(1).take(3).forEach { add("他の意味 ${it.ord + 1}" to it.jaLine) }
+            },
             examples = content.senseExamples(sense).take(2),
         )
     }
+
+    /**
+     * A sentence that can be asked about this sense of this word, or null.
+     *
+     * WordNet files an example against a *synset*, and a synset is a set of
+     * words, so the sentence it stores is written with whichever member the
+     * lexicographer reached for. Under `measure` 「法案」 that is "they held a
+     * public hearing on the bill"; under 「評価する」, "Can you quantify your
+     * results?". Both are correct English for the meaning and neither can be
+     * used to ask which meaning of `measure` is in play, because `measure` is
+     * not in them. **2,419 of the 9,842 context cards in the shipped database
+     * (24.6%) were built on a sentence without the word in it.**
+     *
+     * So the sentence has to contain the word. Requiring it costs 1,480 cards
+     * and leaves 348 words of 5,061 with none — those are the words whose every
+     * example was about a synonym, and there was never a question to ask about
+     * them.
+     */
+    private fun contextExample(entry: Entry, sense: Sense): Example? =
+        content.senseExamples(sense)
+            .firstOrNull { it.en.isNotBlank() && entry.appearsIn(it.en) }
 
     /**
      * The card this app exists for: the same word in a sentence, and the question
@@ -178,9 +217,7 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
     private fun context(card: UserDb.DueCard, entry: Entry, senses: List<Sense>): StudyCard? {
         val sense = senses.firstOrNull { card.senseId in it.sourceIds } ?: return null
         if (senses.size < 2) return null
-        val example = content.senseExamples(sense).firstOrNull { it.en.isNotBlank() }
-            ?: return null
-        val correct = sense.jaLine
+        val example = contextExample(entry, sense) ?: return null
         // The wrong answers are the word's own other meanings and nothing else,
         // so a two-sense word gives a two-way question. That is the real task —
         // padding it out with another word's meaning would make it guessable.
@@ -189,21 +226,40 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         // answer, it is the same answer written twice; ContentDb.senses folds
         // those together, and this refuses to build the question if any slip
         // through. Better no card than a card with two correct options.
-        val others = senses.filter { it.id != sense.id && !it.sharesGloss(sense) }
-            .map { it.jaLine }.filter { it != correct }.take(3)
+        val wrong = senses.filter { it.id != sense.id && !it.sharesGloss(sense) }.take(3)
+        if (wrong.isEmpty()) return null
+        // Every option here is a real meaning of the same word out of the same
+        // dictionary, so they already have the same shape — the right answer is
+        // the longest line on 36% of these cards against 25% by chance, and
+        // cutting every option down to the shortest one's length moves that to
+        // 35% while throwing away most of what the buttons say. The remaining
+        // 11 points are the lengths of Japanese words, which is not something
+        // the card can or should flatten.
+        val correct = choiceLine(sense)
+        val others = wrong.map { choiceLine(it) }.filter { it != correct }.distinct()
         if (others.isEmpty()) return null
         val choices = (listOf(correct) + others).shuffled(random)
         return StudyCard(
             key = card.key, kind = card.kind, deck = card.deck, entry = entry, sense = sense,
             instruction = "この文の ${entry.lemma} はどの意味？",
             prompt = example.en,
-            promptJa = example.ja,
+            // Deliberately no Japanese with the question. A translation of the
+            // sentence is a translation of the word in it, so printing it under
+            // the English hands over the answer — on 1,787 of these cards
+            // (18.2%) the correct option appeared in it character for
+            // character (`get` 「到着」 over 「彼女は7時に家に到着した」). It
+            // is worth reading afterwards, so it moves below the line with the
+            // rest of the answer.
             promptNotes = heading(entry),
             mode = AnswerMode.CHOICE,
             choices = choices,
             correctIndex = choices.indexOf(correct),
             answerTitle = correct,
-            answerNotes = senseNotes(sense),
+            answerNotes = buildList {
+                if (example.ja.isNotBlank()) add("この文の訳" to example.ja)
+                if (sense.ja.size > MAX_CHOICE_GLOSSES) add("訳語" to sense.jaLine)
+                addAll(senseNotes(sense))
+            },
         )
     }
 
@@ -223,10 +279,26 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         )
     }
 
+    /**
+     * True when blanking the word out of this sentence actually removes it.
+     *
+     * The blank falls on one spelling, and a sentence can carry two: "Plums grow
+     * on ______ trees", "The President ______ the bill, but Congress overrode
+     * his veto". Eight sentences in the database do this, which is few enough to
+     * simply not ask about — blanking both would make two answers out of one
+     * question.
+     */
+    private fun blanksCleanly(entry: Entry, linked: ContentDb.LinkedSentence): Boolean {
+        val rest = blankOut(linked.example.en, linked.surface)
+        val others = entry.surfaces().filter { !it.equals(linked.surface, ignoreCase = true) }
+        return others.none { blankOut(rest, it) != rest }
+    }
+
     private fun cloze(card: UserDb.DueCard, entry: Entry): StudyCard? {
         val id = card.extra.toLongOrNull() ?: return null
         val linked = content.sentences(entry.id, limit = 8).firstOrNull { it.id == id }
             ?: return null
+        if (!blanksCleanly(entry, linked)) return null
         val sense = content.senses(entry.id).firstOrNull { it.ja.isNotEmpty() }
         return StudyCard(
             key = card.key, kind = card.kind, deck = card.deck, entry = entry, sense = sense,
@@ -255,10 +327,10 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
      * Which word goes with which. The blank falls on the half that is not
      * predictable from the meaning: you can guess `decision` from 決定, but
      * nothing tells you it is `make` and not `do`.
+     *
+     * [blanked] says which half goes and what is left on the screen.
      */
-    private fun collocation(card: UserDb.DueCard, entry: Entry): StudyCard? {
-        val coll = content.collocations(entry.id, limit = 10)
-            .firstOrNull { it.collocate == card.extra } ?: return null
+    private fun blanked(coll: Collocation): Pair<String, String> {
         val blankHead = coll.pattern == "v+n" || coll.pattern == "adj+n"
         val answer = if (blankHead) coll.head else coll.collocate
         val shown = if (blankHead) {
@@ -266,6 +338,21 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
         } else {
             coll.phrase.replaceFirst(Regex("\\b${Regex.escape(coll.collocate)}$"), "______")
         }
+        return answer to shown
+    }
+
+    /** `wee wee`: blanking one `wee` leaves the other one standing. */
+    private fun leaksAnswer(coll: Collocation): Boolean {
+        val (answer, shown) = blanked(coll)
+        return blankOut(shown, answer) != shown
+    }
+
+    private fun collocation(card: UserDb.DueCard, entry: Entry): StudyCard? {
+        val coll = content.collocations(entry.id, limit = 10)
+            .firstOrNull { it.collocate == card.extra } ?: return null
+        if (leaksAnswer(coll)) return null
+        val blankHead = coll.pattern == "v+n" || coll.pattern == "adj+n"
+        val (answer, shown) = blanked(coll)
         val exclude = setOf(answer, coll.head, coll.collocate)
         val distractors = if (blankHead) {
             content.collocationDistractors(coll.pattern, exclude, 3)
@@ -367,6 +454,16 @@ class CardFactory(private val content: ContentDb, private val random: Random = R
     companion object {
         /** How many meanings of one word are worth telling apart on sight. */
         const val MAX_CONTEXT = 3
+
+        /**
+         * How many Japanese words one multiple-choice option may list.
+         *
+         * A sense can carry eight, and four of those side by side is not a
+         * question anyone reads. On the meaning card every option lists the
+         * same number as well, so that the answer is never the one that simply
+         * looks longest — see [ContentDb.distractorMeanings].
+         */
+        const val MAX_CHOICE_GLOSSES = 3
 
         fun tagJa(tag: String): String = when (tag) {
             "transitive" -> "他動詞"

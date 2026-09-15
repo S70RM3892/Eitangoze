@@ -102,6 +102,41 @@ data class Entry(
         add(lemma)
         forms.forEach { add(it.second) }
     }
+
+    /**
+     * True when [text] actually contains this word, in any of its forms.
+     *
+     * Needed because a WordNet example belongs to a *synset* rather than to a
+     * word: the sentence filed under `measure`'s 法案 sense is "they held a
+     * public hearing on the bill", and under its 評価する sense, "Can you
+     * quantify your results?". Both are honest sentences for the meaning and
+     * neither contains `measure`, so neither can be used to ask which meaning
+     * of `measure` is in play. See [com.eitangoze.data.CardFactory.context].
+     *
+     * Whole words only — `measured` counts, `measurement` does not, because a
+     * different word is a different memory.
+     */
+    fun appearsIn(text: String): Boolean {
+        if (text.isBlank()) return false
+        val haystack = text.lowercase()
+        return surfaces().any { form -> form.isNotBlank() && haystack.holdsWord(form.lowercase()) }
+    }
+}
+
+/** [word] in this text, with a non-letter on both sides. Regex's `\b`, by hand. */
+private fun String.holdsWord(word: String): Boolean {
+    var from = indexOf(word)
+    while (from >= 0) {
+        val before = from - 1
+        val after = from + word.length
+        if ((before < 0 || !this[before].isLetterOrDigit()) &&
+            (after >= length || !this[after].isLetterOrDigit())
+        ) {
+            return true
+        }
+        from = indexOf(word, from + 1)
+    }
+    return false
 }
 
 /**

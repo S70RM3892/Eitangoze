@@ -161,7 +161,11 @@ class ContentDbTest {
                 if (senses.size < 2) return@forEach
                 factory.specs(entry, deckId, setOf(CardKind.CONTEXT)).forEach { spec ->
                     val card = factory.build(fakeDue(spec)) ?: return@forEach
-                    val ownMeanings = senses.map { it.jaLine }.toSet()
+                    // As they go on a button: capped at CardFactory.MAX_CHOICE_GLOSSES,
+                    // so that no option is the one that simply looks longest.
+                    val ownMeanings = senses.map {
+                        it.ja.take(CardFactory.MAX_CHOICE_GLOSSES).joinToString("、")
+                    }.toSet()
                     assertTrue(
                         "${entry.lemma}: choices are not its own senses",
                         card.choices.all { it in ownMeanings },

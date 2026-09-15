@@ -48,7 +48,7 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
         rootLang = c.getString(12),
         rootGloss = c.getString(13),
         rootId = c.getLong(14),
-        ja = c.getString(15).splitField(),
+        ja = c.getString(15).splitField().dedupeGlosses(),
     )
 
     private val entryColumns =
@@ -148,7 +148,7 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
         id = c.getLong(0),
         entryId = c.getLong(1),
         ord = c.getInt(2),
-        ja = c.getString(3).splitField(),
+        ja = c.getString(3).splitField().dedupeGlosses(),
         jaDefinition = c.getString(4),
         definition = c.getString(5),
         parent = c.getString(6),
@@ -233,7 +233,7 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
                 head.copy(
                     // Capped at the width a single row already uses: a merged
                     // meaning has to stay readable as one answer on a button.
-                    ja = members.flatMap { it.ja }.distinct().take(MAX_GLOSSES),
+                    ja = members.flatMap { it.ja }.dedupeGlosses().take(MAX_GLOSSES),
                     tags = members.flatMap { it.tags }.distinct(),
                     topics = members.flatMap { it.topics }.distinct(),
                     synonyms = members.flatMap { it.synonyms }.distinct(),
@@ -381,33 +381,57 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
      *
      * Drawn from entries of a nearby rank so the wrong answers are the same
      * difficulty as the right one — distractors that are obviously too easy
-     * turn a meaning question into a reading-speed question.
+     * turn a meaning question into a reading-speed question. And written the
+     * same way as the right one.
+     *
+     * [glosses] is how many Japanese words the correct option lists, and the
+     * wrong ones list the same number. They did not, and the effect was that on
+     * 78% of the meaning cards the correct answer was the only option with a
+     * 「、」 in it — 「方策、策、術」 against 「毛布」「予算」「病院」. A learner
+     * who cannot read the English at all could pick the long one and be right
+     * five times in six, which means the card measured nothing.
+     *
+     * The wrong answers are drawn from words the decks would teach, for the same
+     * reason the decks won't: a card offering 「ベリリウム」 against `if` puts
+     * the element on the screen as though it were a thing to learn, and the
+     * learner has no way to know it is only there to be rejected.
      */
-    fun distractorMeanings(near: Entry, exclude: Set<String>, count: Int): List<String> {
+    fun distractorMeanings(
+        near: Entry,
+        exclude: Set<String>,
+        count: Int,
+        glosses: Int = 1,
+    ): List<String> {
         val out = LinkedHashSet<String>()
+        val used = HashSet(exclude)
+
+        fun consider(id: Long, field: String): Boolean {
+            if (id in untaught) return false
+            val words = field.splitField().dedupeGlosses().take(glosses)
+            // Same shape or nothing: an option with fewer words than the rest is
+            // as much of a tell as one with more.
+            if (words.size < glosses || words.any { it in used }) return false
+            used.addAll(words)
+            return out.add(words.joinToString("、"))
+        }
+
         val window = 400
         db.rawQuery(
-            "SELECT ja FROM entry WHERE pos = ? AND ja <> '' AND rank BETWEEN ? AND ? " +
+            "SELECT id, ja FROM entry WHERE pos = ? AND ja <> '' AND rank BETWEEN ? AND ? " +
                 "AND id <> ? ORDER BY RANDOM() LIMIT ?",
             arrayOf(
                 near.pos.code, (near.rank - window).coerceAtLeast(1).toString(),
-                (near.rank + window).toString(), near.id.toString(), (count * 4).toString(),
+                (near.rank + window).toString(), near.id.toString(), (count * 12).toString(),
             ),
         ).use { c ->
-            while (c.moveToNext() && out.size < count) {
-                val ja = c.getString(0).splitField().firstOrNull() ?: continue
-                if (ja !in exclude) out.add(ja)
-            }
+            while (c.moveToNext() && out.size < count) consider(c.getLong(0), c.getString(1))
         }
         if (out.size < count) {
             db.rawQuery(
-                "SELECT ja FROM entry WHERE ja <> '' AND id <> ? ORDER BY RANDOM() LIMIT ?",
-                arrayOf(near.id.toString(), (count * 4).toString()),
+                "SELECT id, ja FROM entry WHERE ja <> '' AND id <> ? ORDER BY RANDOM() LIMIT ?",
+                arrayOf(near.id.toString(), (count * 12).toString()),
             ).use { c ->
-                while (c.moveToNext() && out.size < count) {
-                    val ja = c.getString(0).splitField().firstOrNull() ?: continue
-                    if (ja !in exclude) out.add(ja)
-                }
+                while (c.moveToNext() && out.size < count) consider(c.getLong(0), c.getString(1))
             }
         }
         return out.toList()
@@ -562,7 +586,7 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
      * because [surfaces] needs the answer for a few hundred words at a time and
      * the sibling test is too slow to ask per row.
      */
-    private val untaught: Set<Long> by lazy {
+    internal val untaught: Set<Long> by lazy {
         val out = HashSet<Long>()
         db.rawQuery("SELECT id FROM entry e WHERE NOT ($TEACHABLE)", null)
             .use { c -> while (c.moveToNext()) out.add(c.getLong(0)) }
@@ -791,3 +815,39 @@ class ContentDb private constructor(private val db: SQLiteDatabase) {
 
 internal fun String.splitField(): List<String> =
     if (isEmpty()) emptyList() else split('|').filter { it.isNotEmpty() }
+
+/**
+ * A word's Japanese, with the same word removed when it is written twice.
+ *
+ * WordNet takes its katakana from more than one source and they spell it to
+ * taste: `measure` carries 「クオンティティ」「クォンティティー」「クォンティティ」,
+ * `week` 「ウィーク」 and 「ウイーク」. To the database these are distinct strings;
+ * to a reader they are one word, and side by side on a button they read as a
+ * list of five meanings where there are three. 185 sense rows even repeat a
+ * gloss character for character (`他の｜他の｜別の｜別の`), which merging sense
+ * rows produced and nothing removed.
+ *
+ * Only katakana is folded, and only over the marks that carry no distinction of
+ * meaning: the long vowel `ー`, the interpunct, and small kana written large.
+ * `毛` and `気` are never touched, because in kanji a different character is a
+ * different word.
+ */
+internal fun List<String>.dedupeGlosses(): List<String> {
+    if (size < 2) return this
+    val seen = HashSet<String>(size * 2)
+    return filter { seen.add(if (KATAKANA.matches(it)) foldKatakana(it) else it) }
+}
+
+private val KATAKANA = Regex("[ァ-ヿ・ｰ]+")
+
+private const val SMALL = "ァィゥェォャュョヮヵヶ"
+private const val LARGE = "アイウエオヤユヨワカケ"
+
+private fun foldKatakana(text: String): String = buildString(text.length) {
+    text.forEach { c ->
+        when (val i = SMALL.indexOf(c)) {
+            -1 -> if (c != 'ー' && c != '・' && c != 'ｰ') append(c)
+            else -> append(LARGE[i])
+        }
+    }
+}
